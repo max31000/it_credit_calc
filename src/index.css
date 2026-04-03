@@ -1,0 +1,8 @@
+/* Base reset — styles provided by Mantine */
+*, *::before, *::after {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+}
