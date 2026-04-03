@@ -1,10 +1,13 @@
 import { defineConfig } from 'vitest/config'
 import react from '@vitejs/plugin-react'
 
+// base: '/credit_calc/' для VDS nginx, '/' для Vercel
+const base = process.env.VITE_BASE_PATH ?? '/credit_calc/'
+
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [react()],
-  base: '/credit_calc/',
+  base,
   build: {
     rolldownOptions: {
       output: {
