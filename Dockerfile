@@ -1,0 +1,16 @@
+# Build stage
+FROM node:20-alpine AS builder
+WORKDIR /app
+COPY package*.json ./
+RUN npm ci --prefer-offline
+COPY . .
+RUN npm run build
+
+# Serve stage — nginx отдаёт статику
+FROM nginx:alpine AS production
+# Копируем собранные файлы в директорию nginx
+COPY --from=builder /app/dist /usr/share/nginx/html/credit_calc
+# Конфиг nginx для SPA
+COPY nginx.conf /etc/nginx/conf.d/default.conf
+EXPOSE 80
+CMD ["nginx", "-g", "daemon off;"]
