@@ -1,4 +1,6 @@
 {
+  "buildCommand": "VITE_BASE_PATH=/ npm run build",
+  "outputDirectory": "dist",
   "rewrites": [
     { "source": "/(.*)", "destination": "/index.html" }
   ],
