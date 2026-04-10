@@ -3,9 +3,10 @@ name: Deploy to VDS
 on:
   push:
     branches: [master]
-  pull_request:
-    branches: [master]
-    types: [closed]
+
+concurrency:
+  group: deploy-credit-calc
+  cancel-in-progress: true
 
 jobs:
   test:
@@ -81,29 +82,31 @@ jobs:
 
     steps:
       - name: Deploy via SSH
-        uses: appleboy/ssh-action@v1.0.3
+        uses: appleboy/ssh-action@v1
+        env:
+          GHCR_PAT: ${{ secrets.GHCR_PAT }}
         with:
           host: ${{ secrets.VDS_HOST }}
           username: ${{ secrets.VDS_USER }}
           key: ${{ secrets.VDS_SSH_PRIVATE_KEY }}
           port: 22
+          envs: GHCR_PAT
           script: |
-            # Логин в GHCR с токеном из секрета
-            echo "${{ secrets.GHCR_PAT }}" | docker login ghcr.io -u max31000 --password-stdin
-
-            # Pull нового образа
+            echo "${GHCR_PAT}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
             docker pull ghcr.io/max31000/it_credit_calc:latest
-
-            # Перезапуск контейнера
-            docker stop credit_calc 2>/dev/null || true
-            docker rm credit_calc 2>/dev/null || true
+            docker stop credit_calc && docker rm credit_calc || true
             docker run -d \
               --name credit_calc \
               --restart unless-stopped \
-              -p 8081:80 \
+              -p 127.0.0.1:8081:80 \
               ghcr.io/max31000/it_credit_calc:latest
-
-            # Проверка
             sleep 3
-            docker ps | grep credit_calc
-            echo "Deploy complete"
+            curl -sf http://localhost:8081/credit_calc/ || (echo "Health check failed" && exit 1)
+            docker image prune -f
+
+      - name: Notify on failure
+        if: failure()
+        run: |
+          curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
+            -d chat_id=${{ secrets.TELEGRAM_CHAT_ID }} \
+            -d text="❌ Credit Calc deploy failed: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
