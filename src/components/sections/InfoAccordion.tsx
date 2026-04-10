@@ -91,7 +91,7 @@ export const InfoAccordion = memo(function InfoAccordion() {
           <Accordion.Panel>
             <Stack gap="sm">
               {/* Winner block */}
-              <Paper bg={winner === 'A' ? 'orange.0' : 'blue.0'} p="md" radius="md" mb="sm">
+              <Paper p="md" radius="md" mb="sm" style={{ backgroundColor: winner === 'A' ? 'var(--mantine-color-orange-light)' : 'var(--mantine-color-blue-light)' }}>
                 <Group gap="sm">
                   <ThemeIcon color={winnerColor} size="lg" variant="light">
                     <IconStar size={18} />
@@ -147,7 +147,7 @@ export const InfoAccordion = memo(function InfoAccordion() {
                 <Box
                   style={{
                     fontFamily: 'monospace',
-                    backgroundColor: 'var(--mantine-color-gray-0)',
+                    backgroundColor: 'var(--mantine-color-gray-light)',
                     padding: '0.5rem',
                     borderRadius: 4,
                     fontSize: 13,

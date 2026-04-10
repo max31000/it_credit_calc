@@ -190,7 +190,7 @@ export const MortgageParams = memo(function MortgageParams() {
           </Stack>
 
           {/* Loan amount display */}
-          <Paper bg="blue.0" p="sm" radius="sm">
+          <Paper p="sm" radius="sm" style={{ backgroundColor: 'var(--mantine-color-blue-light)' }}>
             {loanAmount === 0 ? (
               <Group gap="xs">
                 <Text size="xs" c="green.7" fw={500} tt="uppercase">

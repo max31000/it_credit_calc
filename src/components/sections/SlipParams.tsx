@@ -130,7 +130,7 @@ export const SlipParams = memo(function SlipParams() {
             value={`${formatRub(result.slipScenario.paymentWithPrepay)}/мес`}
             color="blue"
             description="После применения накоплений к долгу"
-            bg="blue.0"
+            bg="var(--mantine-color-blue-light)"
           />
         </SimpleGrid>
       )}
