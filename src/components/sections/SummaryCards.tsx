@@ -188,10 +188,10 @@ export const SummaryCards = memo(function SummaryCards() {
 
           {/* Safety point block */}
           <Paper
-            bg={safetyPoint !== null ? 'green.0' : 'red.0'}
             p="sm"
             radius="sm"
             mt="sm"
+            style={{ backgroundColor: safetyPoint !== null ? 'var(--mantine-color-green-light)' : 'var(--mantine-color-red-light)' }}
           >
             <Group gap="xs">
               <ThemeIcon
@@ -205,7 +205,7 @@ export const SummaryCards = memo(function SummaryCards() {
                 <Text
                   size="sm"
                   fw={600}
-                  c={safetyPoint !== null ? 'green.8' : 'red.8'}
+                  c={safetyPoint !== null ? 'green' : 'red'}
                 >
                   Точка безопасности
                 </Text>
@@ -219,7 +219,7 @@ export const SummaryCards = memo(function SummaryCards() {
       </SimpleGrid>
 
       {/* Winner delta */}
-      <Paper bg="gray.0" p="md" radius="md" mt="md">
+      <Paper p="md" radius="md" mt="md" style={{ backgroundColor: 'var(--mantine-color-gray-light)' }}>
         <Stack gap={4} align="center">
           <Text size="sm" c="dimmed">
             Преимущество победителя на горизонте

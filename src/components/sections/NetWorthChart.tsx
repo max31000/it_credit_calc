@@ -1,5 +1,5 @@
 import { memo, useMemo } from 'react'
-import { Paper, Text, Group, Box } from '@mantine/core'
+import { Paper, Text, Group, Box, useComputedColorScheme } from '@mantine/core'
 import {
   LineChart,
   Line,
@@ -57,6 +57,9 @@ function xTickFormatter(v: number): string {
 export const NetWorthChart = memo(function NetWorthChart() {
   const params = useCalculatorStore((s) => s.params)
   const result = useCalculatorStore((s) => s.result)
+  const isDark = useComputedColorScheme('light') === 'dark'
+  const gridColor = isDark ? '#373A40' : '#e9ecef'
+  const tickColor = isDark ? '#909296' : '#868e96'
 
   const data = useMemo(
     () =>
@@ -102,13 +105,13 @@ export const NetWorthChart = memo(function NetWorthChart() {
       <Box style={{ height: 300 }}>
         <ResponsiveContainer width="100%" height="100%">
           <LineChart data={data} margin={{ top: 20, right: 30, left: 10, bottom: 5 }}>
-            <CartesianGrid strokeDasharray="3 3" stroke="#e9ecef" />
+            <CartesianGrid strokeDasharray="3 3" stroke={gridColor} />
             <XAxis
               dataKey="month"
               tickFormatter={xTickFormatter}
-              tick={{ fontSize: 12, fill: '#868e96' }}
+              tick={{ fontSize: 12, fill: tickColor }}
             />
-            <YAxis tickFormatter={formatYAxis} tick={{ fontSize: 12, fill: '#868e96' }} width={65} />
+            <YAxis tickFormatter={formatYAxis} tick={{ fontSize: 12, fill: tickColor }} width={65} />
             <Tooltip content={<CustomTooltip />} />
             <Legend />
             <ReferenceLine y={0} stroke="#868e96" strokeDasharray="4 4" strokeWidth={1} />

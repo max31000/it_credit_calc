@@ -12,7 +12,7 @@ import { InfoAccordion } from './components/sections/InfoAccordion'
 
 function App() {
   return (
-    <MantineProvider>
+    <MantineProvider defaultColorScheme="auto">
       <Layout>
         <Header />
         <Stack gap="xl">

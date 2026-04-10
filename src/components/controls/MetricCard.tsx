@@ -33,10 +33,10 @@ export function MetricCard({
 }: MetricCardProps) {
   const card = (
     <Paper
-      bg={bg ?? 'gray.0'}
+      bg={bg}
       p="md"
       radius="md"
-      style={{ height: '100%' }}
+      style={{ height: '100%', backgroundColor: bg ? undefined : 'var(--mantine-color-gray-light)' }}
     >
       <Text size="xs" c="dimmed" tt="uppercase" fw={500} mb={4}>
         {label}

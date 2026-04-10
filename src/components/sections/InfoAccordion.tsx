@@ -216,10 +216,10 @@ export const InfoAccordion = memo(function InfoAccordion() {
               </Text>
 
               {safetyMonth !== null && safetyPoint !== null ? (
-                <Paper bg="green.0" p="md" radius="md">
+                <Paper style={{ backgroundColor: 'var(--mantine-color-green-light)' }} p="md" radius="md">
                   <Group gap="xs" mb="xs">
                     <IconShieldCheck size={18} color="var(--mantine-color-green-7)" />
-                    <Text fw={700} c="green.8">
+                    <Text fw={700} c="green">
                       Точка безопасности: месяц {safetyMonth}
                     </Text>
                   </Group>
@@ -369,10 +369,10 @@ export const InfoAccordion = memo(function InfoAccordion() {
                   </Text>
                 </Group>
 
-                <Paper bg="green.0" p="sm" radius="sm">
+                <Paper style={{ backgroundColor: 'var(--mantine-color-green-light)' }} p="sm" radius="sm">
                   <Group justify="space-between">
                     <Text fw={600}>Суммарный налоговый вычет</Text>
-                    <Text fw={700} size="lg" c="green.8">
+                    <Text fw={700} size="lg" c="green">
                       {formatRub(result.tax.deductionBuy + result.tax.deductionInterestTotal)}
                     </Text>
                   </Group>

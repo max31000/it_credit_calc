@@ -6,8 +6,8 @@ export function Header() {
     <Box
       component="header"
       style={{
-        backgroundColor: '#ffffff',
-        borderBottom: '1px solid #e9ecef',
+        backgroundColor: 'var(--mantine-color-body)',
+        borderBottom: '1px solid var(--mantine-color-default-border)',
         paddingTop: 20,
         paddingBottom: 20,
       }}

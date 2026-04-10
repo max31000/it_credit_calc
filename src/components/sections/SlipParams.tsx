@@ -123,7 +123,7 @@ export const SlipParams = memo(function SlipParams() {
             value={`${formatRub(result.slipScenario.paymentWithoutPrepay)}/мес`}
             color="red"
             description="Только обязательный аннуитет по рыночной ставке"
-            bg="red.0"
+            bg="var(--mantine-color-red-light)"
           />
           <MetricCard
             label="Платёж при слёте со стратегией А"

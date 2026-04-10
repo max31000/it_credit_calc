@@ -1,5 +1,5 @@
 import { memo, useMemo } from 'react'
-import { Paper, Text, Stack, Box, Alert, Group, ThemeIcon } from '@mantine/core'
+import { Paper, Text, Stack, Box, Alert, Group, ThemeIcon, useComputedColorScheme } from '@mantine/core'
 import {
   ComposedChart,
   Line,
@@ -58,6 +58,9 @@ function xTickFormatter(v: number): string {
 export const SlipAnalysisChart = memo(function SlipAnalysisChart() {
   const params = useCalculatorStore((s) => s.params)
   const result = useCalculatorStore((s) => s.result)
+  const isDark = useComputedColorScheme('light') === 'dark'
+  const gridColor = isDark ? '#373A40' : '#e9ecef'
+  const tickColor = isDark ? '#909296' : '#868e96'
 
   const data = useMemo(
     () =>
@@ -75,7 +78,7 @@ export const SlipAnalysisChart = memo(function SlipAnalysisChart() {
 
   const safetyAnnotation =
     safetyMonth !== null && safetyPoint !== null ? (
-      <Paper bg="green.0" p="sm" radius="sm" mt="xs">
+      <Paper p="sm" radius="sm" mt="xs" style={{ backgroundColor: 'var(--mantine-color-green-light)' }}>
         <Group gap="xs" align="flex-start">
           <ThemeIcon color="green" variant="light" size="sm">
             <IconShieldCheck size={12} />
@@ -138,15 +141,15 @@ export const SlipAnalysisChart = memo(function SlipAnalysisChart() {
       <Box style={{ height: 280 }}>
         <ResponsiveContainer width="100%" height="100%">
           <ComposedChart data={data} margin={{ top: 20, right: 30, left: 10, bottom: 5 }}>
-            <CartesianGrid strokeDasharray="3 3" stroke="#e9ecef" />
+            <CartesianGrid strokeDasharray="3 3" stroke={gridColor} />
             <XAxis
               dataKey="month"
               tickFormatter={xTickFormatter}
-              tick={{ fontSize: 12, fill: '#868e96' }}
+              tick={{ fontSize: 12, fill: tickColor }}
             />
             <YAxis
               tickFormatter={formatYAxis}
-              tick={{ fontSize: 12, fill: '#868e96' }}
+              tick={{ fontSize: 12, fill: tickColor }}
               width={65}
             />
             <Tooltip
