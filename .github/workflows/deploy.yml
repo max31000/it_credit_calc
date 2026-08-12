@@ -10,8 +10,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  test:
-    name: Test
+  test-web:
+    name: Test (web)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -31,10 +31,41 @@ jobs:
       - name: Type check
         run: npm run typecheck
 
-  build-and-push:
-    name: Build & Push Docker image
+      - name: Lint
+        run: npm run lint
+
+  test-api:
+    name: Test (api)
     runs-on: ubuntu-latest
-    needs: test
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Cache NuGet packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: ${{ runner.os }}-nuget-${{ hashFiles('server/**/*.csproj') }}
+          restore-keys: |
+            ${{ runner.os }}-nuget-
+
+      - name: Restore
+        run: dotnet restore server/CreditCalc.sln
+
+      - name: Build
+        run: dotnet build server/CreditCalc.sln -c Release --no-restore
+
+      - name: Test
+        run: dotnet test server/CreditCalc.sln -c Release --no-build
+
+  build-web:
+    name: Build & Push Docker image (web)
+    runs-on: ubuntu-latest
+    needs: [test-web, test-api]
     if: github.ref == 'refs/heads/master'
     permissions:
       contents: read
@@ -72,37 +103,120 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            VITE_API_BASE=/credit_calc/api
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  build-api:
+    name: Build & Push Docker image (api)
+    runs-on: ubuntu-latest
+    needs: [test-web, test-api]
+    if: github.ref == 'refs/heads/master'
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/max31000/it_credit_calc-api
+          tags: |
+            type=raw,value=latest
+            type=sha,prefix=sha-
+
+      - name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          context: ./server
+          file: server/Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
   deploy:
     name: Deploy to VDS
     runs-on: ubuntu-latest
-    needs: build-and-push
+    needs: [build-web, build-api]
     if: github.ref == 'refs/heads/master'
 
     steps:
-      - name: Deploy via SSH
-        uses: appleboy/ssh-action@v1
-        env:
-          GHCR_PAT: ${{ secrets.GHCR_PAT }}
+      - uses: actions/checkout@v4
+
+      - name: Copy compose file to VDS
+        uses: appleboy/scp-action@v0.1.7
         with:
           host: ${{ secrets.VDS_HOST }}
           username: ${{ secrets.VDS_USER }}
           key: ${{ secrets.VDS_SSH_PRIVATE_KEY }}
           port: 22
-          envs: GHCR_PAT
+          source: "deploy/docker-compose.prod.yml"
+          target: "/opt/credit_calc/"
+          strip_components: 1
+
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1
+        env:
+          GHCR_PAT: ${{ secrets.GHCR_PAT }}
+          JWT_SECRET: ${{ secrets.JWT_SECRET }}
+          MYSQL_ROOT_PASSWORD: ${{ secrets.MYSQL_ROOT_PASSWORD }}
+          MYSQL_PASSWORD: ${{ secrets.MYSQL_PASSWORD }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+        with:
+          host: ${{ secrets.VDS_HOST }}
+          username: ${{ secrets.VDS_USER }}
+          key: ${{ secrets.VDS_SSH_PRIVATE_KEY }}
+          port: 22
+          envs: GHCR_PAT,JWT_SECRET,MYSQL_ROOT_PASSWORD,MYSQL_PASSWORD,TELEGRAM_BOT_TOKEN
           script: |
+            set -e
+            cd /opt/credit_calc
+            umask 077
+            cat > .env <<EOF
+            JWT_SECRET=${JWT_SECRET}
+            MYSQL_ROOT_PASSWORD=${MYSQL_ROOT_PASSWORD}
+            MYSQL_PASSWORD=${MYSQL_PASSWORD}
+            TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+            EOF
+            chmod 600 .env
             echo "${GHCR_PAT}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
-            docker pull ghcr.io/max31000/it_credit_calc:latest
-            docker stop credit_calc && docker rm credit_calc || true
-            docker run -d \
-              --name credit_calc \
-              --restart unless-stopped \
-              -p 127.0.0.1:8081:80 \
-              ghcr.io/max31000/it_credit_calc:latest
-            sleep 3
-            curl -sf http://localhost:8081/credit_calc/ || (echo "Health check failed" && exit 1)
+            docker compose -f docker-compose.prod.yml pull
+            docker compose -f docker-compose.prod.yml up -d --remove-orphans
+            # На первом деплое том MySQL пустой: инициализация БД занимает десятки секунд,
+            # API успевает упасть на миграциях и перезапуститься (restart: unless-stopped).
+            # Поэтому health-гейт — с ретраями, а не одиночный curl после sleep 10.
+            ok=0
+            for i in $(seq 1 30); do
+              if curl -sf http://localhost:8081/credit_calc/ >/dev/null \
+                 && curl -sf http://localhost:8081/credit_calc/api/health | grep -q '"ok"'; then
+                ok=1
+                echo "health ok after ${i} attempt(s)"
+                break
+              fi
+              sleep 5
+            done
+            if [ "$ok" -ne 1 ]; then
+              echo "health check failed after 150s"
+              docker compose -f docker-compose.prod.yml ps
+              docker compose -f docker-compose.prod.yml logs --tail=50 credit_calc_api
+              exit 1
+            fi
             docker image prune -f
 
       - name: Notify on failure

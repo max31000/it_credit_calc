@@ -1,0 +1,54 @@
+services:
+  credit_calc:
+    image: ghcr.io/max31000/it_credit_calc:latest
+    container_name: credit_calc
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8081:80"
+    depends_on:
+      - credit_calc_api
+    networks:
+      - credit_calc_net
+
+  credit_calc_api:
+    image: ghcr.io/max31000/it_credit_calc-api:latest
+    container_name: credit_calc_api
+    restart: unless-stopped
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      ASPNETCORE_URLS: http://+:8080
+      ConnectionStrings__DefaultConnection: "Server=credit_calc_mysql;Port=3306;Database=credit_calc;User=credit_calc;Password=${MYSQL_PASSWORD};AllowPublicKeyRetrieval=true;"
+      Jwt__Secret: "${JWT_SECRET}"
+      Telegram__BotToken: "${TELEGRAM_BOT_TOKEN}"
+      Telegram__BotUsername: mv_cashpulse_bot
+    depends_on:
+      credit_calc_mysql:
+        condition: service_healthy
+    networks:
+      - credit_calc_net
+
+  credit_calc_mysql:
+    image: mysql:8.0
+    container_name: credit_calc_mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: "${MYSQL_ROOT_PASSWORD}"
+      MYSQL_DATABASE: credit_calc
+      MYSQL_USER: credit_calc
+      MYSQL_PASSWORD: "${MYSQL_PASSWORD}"
+    volumes:
+      - credit_calc_mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1"]
+      interval: 10s
+      retries: 10
+      start_period: 30s
+    networks:
+      - credit_calc_net
+
+networks:
+  credit_calc_net:
+    driver: bridge
+
+volumes:
+  credit_calc_mysql_data:

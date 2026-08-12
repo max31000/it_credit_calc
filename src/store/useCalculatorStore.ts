@@ -5,8 +5,13 @@ import { calculate, type MortgageParams, type CalculationResult } from '../lib/e
 
 interface CalculatorState {
   params: MortgageParams
+  /** Тумблер сценария слёта. По умолчанию выключен — расчёт идёт по льготной ставке. */
+  slipEnabled: boolean
   result: CalculationResult
   setParam: <K extends keyof MortgageParams>(key: K, value: MortgageParams[K]) => void
+  setSlipEnabled: (value: boolean) => void
+  /** Месяц слёта, который реально участвует в расчёте: 0, если тумблер выключен. */
+  effectiveSlipMonth: () => number
 }
 
 const defaultParams: MortgageParams = {
@@ -23,28 +28,55 @@ const defaultParams: MortgageParams = {
   salary: null,
 }
 
+/** Слёт уходит в движок только если тумблер включён — иначе params.slipMonth лишь «запомненная» позиция слайдера. */
+const recalc = (params: MortgageParams, slipEnabled: boolean): CalculationResult =>
+  calculate({ ...params, slipMonth: slipEnabled ? params.slipMonth : 0 })
+
+interface PersistedCalculatorState {
+  params: MortgageParams
+  slipEnabled: boolean
+}
+
 export const useCalculatorStore = create<CalculatorState>()(
   persist(
     (set, get) => ({
       params: defaultParams,
-      result: calculate(defaultParams),
+      slipEnabled: false,
+      result: recalc(defaultParams, false),
       setParam: (key, value) => {
         const newParams = { ...get().params, [key]: value }
         set({ params: newParams })
         startTransition(() => {
-          set({ result: calculate(newParams) })
+          set({ result: recalc(newParams, get().slipEnabled) })
         })
       },
+      setSlipEnabled: (value) => {
+        set({ slipEnabled: value })
+        startTransition(() => {
+          set({ result: recalc(get().params, value) })
+        })
+      },
+      effectiveSlipMonth: () => (get().slipEnabled ? get().params.slipMonth : 0),
     }),
     {
       name: 'mortgage-calculator-params',
-      version: 1,
-      partialize: (state) => ({ params: state.params }),
+      version: 2,
+      partialize: (state) => ({ params: state.params, slipEnabled: state.slipEnabled }),
+      migrate: (persisted, version): PersistedCalculatorState => {
+        const prev = persisted as Partial<PersistedCalculatorState>
+        if (version < 2) {
+          // Старое сохранённое значение slipMonth (обычно дефолтные 36) — не осознанный
+          // выбор пользователя, а дефолт слайдера. Тумблер остаётся выключенным.
+          return { params: prev.params ?? defaultParams, slipEnabled: false }
+        }
+        return { params: prev.params ?? defaultParams, slipEnabled: prev.slipEnabled ?? false }
+      },
       onRehydrateStorage: () => (state) => {
         if (state) {
           // Защита от неполных/устаревших данных: восстанавливаем дефолты для undefined полей
           state.params = { ...defaultParams, ...state.params }
-          state.result = calculate(state.params)
+          state.slipEnabled = state.slipEnabled ?? false
+          state.result = recalc(state.params, state.slipEnabled)
         }
       },
     }

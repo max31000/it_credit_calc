@@ -41,3 +41,8 @@ coverage/
 
 # Vite cache
 .vite/
+
+# .NET build output (server/)
+bin/
+obj/
+*.user

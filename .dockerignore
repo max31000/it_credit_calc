@@ -1,0 +1,25 @@
+# Контекст фронтового (корневого) Dockerfile.
+# Без этого файла `COPY . .` затирает node_modules, установленные `npm ci` в образе,
+# локальными (собранными под macOS) — локальная сборка образа ломается или молча
+# использует чужие бинарники. Плюс в контекст улетает ~400 МБ мусора.
+node_modules
+dist
+dist-ssr
+
+# Бэкенд собирается отдельным Dockerfile с контекстом ./server
+server
+
+# Не нужно для сборки статики
+.git
+.github
+docs
+deploy
+*.md
+!README.md
+.env
+.env.local
+.env.*.local
+coverage
+.vscode
+.idea
+.DS_Store

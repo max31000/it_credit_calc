@@ -14,3 +14,9 @@ export const formatMonths = (m: number): string => {
   if (mo === 0) return `${y} ${y === 1 ? 'год' : y < 5 ? 'года' : 'лет'}`
   return `${y} г. ${mo} мес.`
 }
+
+/** 'YYYY-MM' → 'MM.YYYY' (для отображения даты закрытия ипотеки) */
+export const formatYearMonth = (ym: string): string => {
+  const [y, m] = ym.split('-')
+  return `${m}.${y}`
+}

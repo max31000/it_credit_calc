@@ -21,6 +21,15 @@ export default defineConfig({
       },
     },
   },
+  server: {
+    proxy: {
+      '/credit_calc/api': {
+        target: 'http://localhost:8080',
+        changeOrigin: true,
+        rewrite: (p) => p.replace(/^\/credit_calc\/api/, '/api'),
+      },
+    },
+  },
   test: {
     globals: true,
     environment: 'jsdom',

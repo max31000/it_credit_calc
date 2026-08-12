@@ -43,8 +43,8 @@ function ChartFrame({
 }
 
 function NetWorthTab() {
-  const params = useCalculatorStore((s) => s.params)
   const result = useCalculatorStore((s) => s.result)
+  const effectiveSlipMonth = useCalculatorStore((s) => s.effectiveSlipMonth())
 
   const data = useMemo(
     () =>
@@ -56,7 +56,7 @@ function NetWorthTab() {
     [result.series],
   )
 
-  const showSlip = result.slip !== null && params.slipMonth > 0
+  const showSlip = result.slip !== null && effectiveSlipMonth > 0
 
   return (
     <Stack gap="xs">
@@ -70,7 +70,7 @@ function NetWorthTab() {
         <ReferenceLine y={0} stroke={CHART_COLORS.neutral} strokeDasharray="4 4" strokeWidth={1} />
         {showSlip && (
           <ReferenceLine
-            x={params.slipMonth}
+            x={effectiveSlipMonth}
             stroke={CHART_COLORS.slip}
             strokeDasharray="6 3"
             strokeWidth={2}
@@ -101,8 +101,8 @@ function NetWorthTab() {
 }
 
 function BalancesTab() {
-  const params = useCalculatorStore((s) => s.params)
   const result = useCalculatorStore((s) => s.result)
+  const effectiveSlipMonth = useCalculatorStore((s) => s.effectiveSlipMonth())
 
   const data = useMemo(
     () =>
@@ -115,7 +115,7 @@ function BalancesTab() {
     [result.series],
   )
 
-  const showSlip = result.slip !== null && params.slipMonth > 0
+  const showSlip = result.slip !== null && effectiveSlipMonth > 0
 
   return (
     <Stack gap="xs">
@@ -127,7 +127,7 @@ function BalancesTab() {
         <Legend />
         {showSlip && (
           <ReferenceLine
-            x={params.slipMonth}
+            x={effectiveSlipMonth}
             stroke={CHART_COLORS.slip}
             strokeDasharray="6 3"
             strokeWidth={2}
@@ -183,8 +183,8 @@ function BalancesTab() {
 }
 
 function SlipRiskTab() {
-  const params = useCalculatorStore((s) => s.params)
   const result = useCalculatorStore((s) => s.result)
+  const effectiveSlipMonth = useCalculatorStore((s) => s.effectiveSlipMonth())
 
   const data = useMemo(
     () =>
@@ -236,9 +236,9 @@ function SlipRiskTab() {
             }}
           />
         )}
-        {params.slipMonth > 0 && params.slipMonth <= data.length && (
+        {effectiveSlipMonth > 0 && effectiveSlipMonth <= data.length && (
           <ReferenceLine
-            x={params.slipMonth}
+            x={effectiveSlipMonth}
             stroke={CHART_COLORS.neutral}
             strokeDasharray="6 3"
             label={{

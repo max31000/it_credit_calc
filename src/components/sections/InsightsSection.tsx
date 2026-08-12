@@ -47,6 +47,7 @@ function InsightCard({ icon, color, title, children }: InsightCardProps) {
 export const InsightsSection = memo(function InsightsSection() {
   const params = useCalculatorStore((s) => s.params)
   const result = useCalculatorStore((s) => s.result)
+  const effectiveSlipMonth = useCalculatorStore((s) => s.effectiveSlipMonth())
 
   const { summary, slip, payoffMonth, safetyMonth, minPayment } = result
   const hasLoan = result.loanAmount > 0
@@ -181,7 +182,7 @@ export const InsightsSection = memo(function InsightsSection() {
             <InsightCard
               icon={<IconCoin size={18} />}
               color="red"
-              title={`Сколько стоит слёт в месяц ${params.slipMonth}`}
+              title={`Сколько стоит слёт в месяц ${effectiveSlipMonth}`}
             >
               Потеря льготы обойдётся в <b>{formatRub(slip.slipLoss)}</b> к горизонту: столько
               капитала съест рыночная ставка {slip.marketRate.toFixed(1)}% по сравнению со

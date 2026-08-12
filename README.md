@@ -7,7 +7,7 @@
 
 | Хостинг | URL | Примечание |
 |---------|-----|-----------|
-| **GitHub Pages** | https://max31000.github.io/it_credit_calc/ | Может блокироваться у некоторых провайдеров |
+| **VDS** | https://mvv42.ru/credit_calc/ | Основной адрес; здесь же доступен трекер ипотеки |
 
 ## Что делает приложение
 
@@ -24,7 +24,17 @@
 - налоговые вычеты (имущественный и по процентам) с прогрессивной шкалой НДФЛ.
 
 Сценарий слёта встроен в симуляцию: в месяц слёта ставка становится рыночной, накопления
-вносятся в досрочное погашение, дальше расчёт идёт по новым условиям.
+вносятся в досрочное погашение, дальше расчёт идёт по новым условиям. Моделирование слёта —
+опциональный тумблер, по умолчанию выключен.
+
+## Трекер ипотеки
+
+Отдельный раздел для тех, кто уже взял ипотеку: список своих ипотек, текущий остаток долга,
+ставка и платёж с учётом корректировок (новая выписка от банка, досрочные платежи, смена
+ставки при слёте с льготы, изменение платежа), прогноз даты полного погашения.
+
+Требует входа через Telegram Login Widget и доступен только на `mvv42.ru/credit_calc/` —
+на GitHub Pages трекер выключен (сборка идёт без адреса API).
 
 ## Параметры
 
@@ -40,20 +50,27 @@
 
 ## Стек и структура
 
-React 19 + TypeScript + Mantine 7 + Recharts + Zustand, Vite, Vitest.
+Фронт: React 19 + TypeScript + Mantine 7 + Recharts + Zustand, Vite, Vitest.
+Бэкенд трекера: .NET 8 minimal API + Dapper + MySQL.
 
 ```
 src/
   lib/
     engine.ts              — финансовый движок (без зависимостей, см. ALGORITHMS.md)
+    tracker.ts              — расчёт состояния ипотеки по истории корректировок
     formatters.ts          — форматирование чисел
-    __tests__/engine.test.ts
-  store/useCalculatorStore.ts — Zustand store (persist в localStorage)
+    __tests__/
+  store/                   — Zustand-сторы (calculator, auth), persist в localStorage
+  api/                     — клиент API трекера
+  pages/                   — Calculator, Login, TrackerList, Mortgage
   components/
     layout/                — Header, Layout
     controls/              — SliderInput, MetricCard, InfoTooltip
     charts/                — общие утилиты графиков
     sections/              — Params, Slip, Insights, Charts, Methodology
+    tracker/                — карточки, формы и статус ипотеки
+server/                    — .NET 8 API трекера (авторизация через Telegram, MySQL)
+deploy/                    — docker-compose и .env-шаблон для VDS
 docs/specs/                — дизайн-документы
 ```
 
@@ -68,7 +85,22 @@ npm run typecheck  # проверка TypeScript
 npm run lint       # ESLint
 ```
 
+Локальный запуск бэкенда трекера (без docker-compose — достаточно контейнера MySQL):
+
+```bash
+docker run -d --name cc_mysql -e MYSQL_ROOT_PASSWORD=dev -e MYSQL_DATABASE=credit_calc -p 3307:3306 mysql:8.0
+dotnet run --project server/src/CreditCalc.Api
+curl localhost:8080/health
+```
+
 ## Деплой
 
-Пуш в `master` → GitHub Actions: тесты, сборка, Docker-образ в GHCR, деплой на VDS
-(портал `mvv42.ru/credit_calc/`) и публикация на GitHub Pages.
+Пуш в `master` → GitHub Actions: тесты фронта и бэкенда, сборка двух Docker-образов
+(`it_credit_calc` — фронт с nginx, `it_credit_calc-api` — API трекера) и публикация в GHCR,
+деплой на VDS через `docker compose`.
+
+Схема на VDS: внешний nginx VDS → `127.0.0.1:8081` → nginx контейнера `it_credit_calc` →
+`/credit_calc/api/` проксируется на `credit_calc_api:8080` внутри общей docker-сети;
+MySQL и API наружу не публикуются. Состав — `deploy/docker-compose.prod.yml`,
+переменные — из `deploy/.env.example` (реальные значения генерируются из GitHub Secrets
+на этапе деплоя).
