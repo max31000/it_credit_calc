@@ -1,15 +1,19 @@
 /**
- * MortgageEngine v1.0
- * Финансовый движок ипотечного калькулятора
- * Алгоритмы: ALGORITHMS.md
+ * MortgageEngine v2.0
+ * Финансовый движок ипотечного калькулятора.
+ * Алгоритмы: ALGORITHMS.md, дизайн: docs/specs/2026-08-12-calculator-v2-design.md
  * Тесты: src/lib/__tests__/engine.test.ts
  *
- * @file engine.ts
- * Реализует алгоритмы сравнения двух стратегий:
- *   А — досрочное погашение с уменьшением платежа
- *   Б — минимальный платёж + инвестиции
+ * Сравнивает два подхода к льготной ипотеке:
+ *   prepay — «гасить досрочно»: весь бюджет уходит в платёж + досрочку
+ *            с уменьшением ежемесячного платежа;
+ *   save   — «копить»: платится минимальный аннуитет, остаток бюджета
+ *            инвестируется под рыночную доходность.
  *
- * Source of truth: ALGORITHMS.md v1.0
+ * Слёт с льготной программы моделируется внутри симуляции: в месяц слёта
+ * ставка становится рыночной, а стратегия save (по умолчанию) немедленно
+ * вносит все накопления в досрочное погашение.
+ *
  * Внешние зависимости: отсутствуют.
  */
 
@@ -38,7 +42,7 @@ export interface MortgageParams {
   horizonYears: number;
   /**
    * Месяц слёта с льготной ипотеки (1-индексация).
-   * 0 = без слёта (slipScenario заполняется по t=0).
+   * 0 = слёта нет.
    */
   slipMonth: number;
   /** Ключевая ставка ЦБ на момент слёта, % годовых */
@@ -52,118 +56,143 @@ export interface MortgageParams {
   salary: number | null;
 }
 
-/** Одна точка помесячного ряда */
+/** Одна точка помесячного ряда (отображаемый сценарий) */
 export interface MonthlyPoint {
   month: number;
-  // Стратегия А — досрочное погашение
-  /** Остаток долга А */
-  debtA: number;
-  /** Накопления А (всегда 0) */
-  savingsA: number;
-  /** Чистое состояние А = -debtA */
-  netWorthA: number;
-  /** Пересчитывающийся аннуитет стратегии А */
-  minPaymentA: number;
-  // Стратегия Б — минимальный платёж + инвестиции
-  /** Остаток долга Б */
-  debtB: number;
-  /** Накопления Б */
-  savingsB: number;
-  /** Чистое состояние Б = savingsB - debtB */
-  netWorthB: number;
+  /** Остаток долга: гасить досрочно */
+  debtPrepay: number;
+  /** Накопления: гасить досрочно (появляются после погашения долга) */
+  savingsPrepay: number;
+  /** Чистое состояние: гасить досрочно */
+  netWorthPrepay: number;
+  /** Текущий обязательный платёж: гасить досрочно */
+  paymentPrepay: number;
+  /** Остаток долга: копить */
+  debtSave: number;
+  /** Накопления: копить */
+  savingsSave: number;
+  /** Чистое состояние: копить */
+  netWorthSave: number;
+  /** Текущий обязательный платёж: копить */
+  paymentSave: number;
 }
 
-/** Точка анализа слёта для конкретного месяца */
+/** Точка анализа слёта: что будет с платежом, если слёт случится в этот месяц */
 export interface SlipPoint {
   /** Момент гипотетического слёта */
   slipMonth: number;
-  /**
-   * Платёж при слёте с применением накоплений Б к долгу Б
-   * (стратегия "объединить накопления и направить на досрочку").
-   */
+  /** Платёж после слёта, если внести все накопления в долг */
   paymentWithPrepay: number;
-  /**
-   * Платёж при слёте без применения накоплений
-   * (пересчёт debtB по рыночной ставке).
-   */
+  /** Платёж после слёта без внесения накоплений */
   paymentWithoutPrepay: number;
 }
 
-/** Информация о налоговых вычетах */
+/** Информация о налоговых вычетах (по стратегии «копить», отображаемый сценарий) */
 export interface TaxInfo {
-  /** Ставка НДФЛ (например 0.13) */
+  /** Маргинальная ставка НДФЛ (например 0.13) — для отображения */
   ndflRate: number;
-  /** Возврат за покупку (единовременно), ₽ */
-  deductionBuy: number;
-  /** Суммарный возврат по процентам за весь горизонт, ₽ */
-  deductionInterestTotal: number;
+  /** Суммарный возврат по имущественному вычету за горизонт, ₽ */
+  propertyReturnTotal: number;
+  /** Суммарный возврат по процентному вычету за горизонт, ₽ */
+  interestReturnTotal: number;
   /** Вычеты по годам */
   byYear: Array<{
     year: number;
-    /** Суммарный возврат за год (имущественный + процентный) */
+    /** Суммарный возврат за год */
     amount: number;
-    /** Имущественный возврат за этот год */
+    /** Имущественная часть возврата */
     propertyReturn: number;
   }>;
 }
 
-/** Итоги по одной стратегии */
+/** Итоги по одной стратегии на горизонте */
 export interface StrategyResult {
-  /** Чистое состояние на горизонте */
+  /** Чистое состояние = накопления − долг */
   netWorth: number;
-  /** Накопления на горизонте */
+  /** Накопления */
   savings: number;
-  /** Остаток долга на горизонте */
+  /** Остаток долга */
   debt: number;
-  /** Суммарно выплачено (платежи + досрочка) */
+  /** Суммарно выплачено банку (платежи + досрочка) */
   totalPaid: number;
-  /** Суммарно процентов */
+  /** Суммарно уплачено процентов */
   totalInterest: number;
+  /** Суммарный возврат НДФЛ */
+  taxReturnTotal: number;
+  /** Проценты, заработанные на накоплениях */
+  investmentIncome: number;
+  /** Месяц полного погашения долга (null — не погашен в горизонте) */
+  debtFreeMonth: number | null;
+}
+
+/** Детали сценария слёта (только при slipMonth > 0) */
+export interface SlipDetails {
+  /** Рыночная ставка после слёта, % годовых */
+  marketRate: number;
+  /** Долг стратегии «копить» в момент слёта */
+  debtAtSlip: number;
+  /** Накопления стратегии «копить» в момент слёта */
+  savingsAtSlip: number;
+  /** Долг после внесения накоплений */
+  debtAfterPrepay: number;
+  /** Накопления после внесения */
+  savingsAfterPrepay: number;
+  /** Новый платёж, если внести накопления в долг */
+  paymentWithPrepay: number;
+  /** Новый платёж без внесения накоплений */
+  paymentWithoutPrepay: number;
+  /** Оставшийся срок ипотеки на момент слёта, месяцев */
+  remainingMonths: number;
+  /**
+   * Цена слёта: насколько хуже станет чистое состояние на горизонте
+   * по сравнению со сценарием без слёта (стратегия «копить», с внесением накоплений).
+   */
+  slipLoss: number;
+  /**
+   * Экономия от внесения накоплений при слёте: разница чистого состояния
+   * на горизонте между «внести всё в долг» и «ничего не делать».
+   */
+  dumpBenefit: number;
 }
 
 /** Полный результат расчёта */
 export interface CalculationResult {
   /** Сумма кредита */
   loanAmount: number;
-  /** Базовый аннуитетный платёж */
+  /** Базовый льготный аннуитет */
   minPayment: number;
-  /** Переплата при классической схеме */
+  /** Переплата при выплате по графику (без досрочки и слёта) */
   totalInterest: number;
-  /** Рыночная ставка при слёте = keyRate - bankDiscount + 1.5, % годовых */
+  /** Рыночная ставка при слёте = keyRate − bankDiscount + 1.5, % годовых */
   marketRateAtSlip: number;
-  /** Помесячный ряд, длина horizonMonths + 1 (включая месяц 0) */
+  /**
+   * Помесячный ряд отображаемого сценария (со слётом, если slipMonth > 0),
+   * длина horizonMonths + 1 (включая месяц 0).
+   */
   series: MonthlyPoint[];
-  /** Анализ слёта по каждому месяцу, длина horizonMonths (месяцы 1..horizonMonths) */
+  /** Анализ платежа при слёте для каждого месяца 1..horizonMonths (без слёта в базе) */
   slipAnalysis: SlipPoint[];
-  /** Первый месяц где paymentWithPrepay <= minPayment, или null */
-  safetyPoint: number | null;
-  /** Детальный сценарий слёта для конкретного slipMonth */
-  slipScenario: {
-    /** Рыночная ставка при слёте, % годовых */
-    marketRate: number;
-    /** Долг Б в момент slipMonth */
-    debtAtSlip: number;
-    /** Накопления Б в момент slipMonth */
-    savingsAtSlip: number;
-    /** Долг Б после применения накоплений Б = max(0, debtB - savingsB) */
-    debtAfterPrepay: number;
-    /** Накопления Б после применения = max(0, savingsB - debtB) */
-    savingsAfterPrepay: number;
-    /** Новый платёж по debtAfterPrepay по рыночной ставке */
-    paymentWithPrepay: number;
-    /** Новый платёж по debtAtSlip по рыночной ставке (без досрочки) */
-    paymentWithoutPrepay: number;
-    /** Оставшийся срок ипотеки, месяцев */
-    remainingMonths: number;
-  };
-  /** null если salary === null */
+  /**
+   * Точка безопасности: первый месяц, начиная с которого даже при слёте
+   * (с внесением накоплений) платёж не превысит льготный. null — не достигнута.
+   */
+  safetyMonth: number | null;
+  /**
+   * Первый месяц, когда накоплений стратегии «копить» (без слёта) хватает,
+   * чтобы закрыть долг целиком. null — не достигается в горизонте.
+   */
+  payoffMonth: number | null;
+  /** Детали слёта (null при slipMonth = 0) */
+  slip: SlipDetails | null;
+  /** Налоговые вычеты стратегии «копить» (null если salary = null) */
   tax: TaxInfo | null;
   summary: {
-    A: StrategyResult;
-    B: StrategyResult;
-    winner: 'A' | 'B' | 'tie';
-    /** Разница netWorth победителя и проигравшего */
-    winnerDelta: number;
+    /** Гасить досрочно (отображаемый сценарий) */
+    prepay: StrategyResult;
+    /** Копить (отображаемый сценарий) */
+    save: StrategyResult;
+    /** Преимущество «копить» над «гасить досрочно» по netWorth (может быть < 0) */
+    advantageSave: number;
   };
 }
 
@@ -172,12 +201,12 @@ export interface CalculationResult {
 // ---------------------------------------------------------------------------
 
 /**
- * Вычисляет аннуитетный платёж PMT.
+ * Аннуитетный платёж PMT.
  * @param principal - остаток долга
  * @param monthlyRate - месячная ставка в долях (например 0.005)
  * @param months - количество оставшихся месяцев
  */
-function calcPMT(principal: number, monthlyRate: number, months: number): number {
+export function calcPMT(principal: number, monthlyRate: number, months: number): number {
   if (principal <= 0) return 0;
   if (months <= 0) return principal; // весь остаток сразу
   if (monthlyRate === 0) return principal / months;
@@ -185,351 +214,358 @@ function calcPMT(principal: number, monthlyRate: number, months: number): number
 }
 
 /**
- * Определяет маргинальную ставку НДФЛ по годовому доходу (прогрессивная шкала 2025).
- * Используется только для отображения в TaxInfo.ndflRate.
- * @param annualSalary - годовой доход, ₽
+ * Маргинальная ставка НДФЛ по годовому доходу (прогрессивная шкала с 2025).
+ * Используется только для отображения.
  */
 function calcNDFLRate(annualSalary: number): number {
   if (annualSalary <= 2_400_000) return 0.13;
   if (annualSalary <= 5_000_000) return 0.15;
   if (annualSalary <= 20_000_000) return 0.18;
-  if (annualSalary <= 50_000_000) return 0.20;
+  if (annualSalary <= 50_000_000) return 0.2;
   return 0.22;
 }
 
 /**
- * Вычисляет фактическую сумму НДФЛ за год по прогрессивной шкале 2025.
- * Каждая ставка применяется только к части дохода в соответствующем диапазоне.
- *
- * Ступени (НК РФ ст. 224, с 01.01.2025):
- *   13% — до 2 400 000 ₽
- *   15% — от 2 400 001 до 5 000 000 ₽
- *   18% — от 5 000 001 до 20 000 000 ₽
- *   20% — от 20 000 001 до 50 000 000 ₽
- *   22% — свыше 50 000 000 ₽
- *
- * @param annualSalary - годовой доход, ₽
+ * Фактическая сумма НДФЛ за год по прогрессивной шкале 2025 (НК РФ ст. 224):
+ * 13% до 2.4М, 15% до 5М, 18% до 20М, 20% до 50М, 22% свыше.
  */
-function calcActualNDFL(annualSalary: number): number {
-  if (annualSalary <= 0) return 0;
-
-  let tax = 0;
-  let remaining = annualSalary;
+function calcActualNDFL(annualIncome: number): number {
+  if (annualIncome <= 0) return 0;
 
   const brackets: Array<[number, number]> = [
-    [2_400_000,  0.13],
-    [2_600_000,  0.15],  // 5 000 000 - 2 400 000
-    [15_000_000, 0.18],  // 20 000 000 - 5 000 000
-    [30_000_000, 0.20],  // 50 000 000 - 20 000 000
-    [Infinity,   0.22],
+    [2_400_000, 0.13],
+    [2_600_000, 0.15], // 5М − 2.4М
+    [15_000_000, 0.18], // 20М − 5М
+    [30_000_000, 0.2], // 50М − 20М
+    [Infinity, 0.22],
   ];
 
+  let tax = 0;
+  let remaining = annualIncome;
   for (const [width, rate] of brackets) {
     if (remaining <= 0) break;
     const taxable = Math.min(remaining, width);
     tax += taxable * rate;
     remaining -= taxable;
   }
-
   return tax;
 }
 
+// ---------------------------------------------------------------------------
+// Симулятор одной стратегии
+// ---------------------------------------------------------------------------
+
+/** Лимит базы имущественного вычета, ₽ */
+const PROPERTY_DEDUCTION_BASE_LIMIT = 2_000_000;
+/** Лимит базы вычета по ипотечным процентам за всю жизнь кредита, ₽ */
+const INTEREST_DEDUCTION_BASE_LIMIT = 3_000_000;
+
+interface SimOptions {
+  /** prepay — гасить досрочно; save — минимальный платёж + инвестиции */
+  strategy: 'prepay' | 'save';
+  /** Месяц слёта (0 = нет). Слёт применяется в конце месяца slipMonth. */
+  slipMonth: number;
+  /** Вносить ли накопления в долг в момент слёта */
+  dumpSavingsAtSlip: boolean;
+}
+
+interface SimPoint {
+  month: number;
+  debt: number;
+  savings: number;
+  /** Обязательный платёж следующего месяца */
+  payment: number;
+}
+
+interface SimResult {
+  /** Точки 0..horizonMonths (нескруглённые значения) */
+  points: SimPoint[];
+  totalPaid: number;
+  totalInterest: number;
+  taxReturnTotal: number;
+  propertyReturnTotal: number;
+  interestReturnTotal: number;
+  taxByYear: Array<{ year: number; amount: number; propertyReturn: number }>;
+  investmentIncome: number;
+  debtFreeMonth: number | null;
+}
+
 /**
- * Вычисляет сумму налогового вычета (возврат НДФЛ) при уменьшении
- * налоговой базы на deductionBase.
+ * Прогоняет одну стратегию по месяцам 1..horizonMonths.
  *
- * Возврат = actualNDFL(annualSalary) - actualNDFL(annualSalary - deductionBase)
- * Это корректная модель: вычет уменьшает базу, НДФЛ пересчитывается по ступеням.
- *
- * @param annualSalary - годовой доход до вычета, ₽
- * @param deductionBase - сумма вычета (уменьшение базы), ₽
+ * Правила:
+ * - До слёта действует льготная ставка; в конце месяца slipMonth ставка
+ *   становится рыночной и аннуитет пересчитывается на остаток срока.
+ * - Стратегия save при слёте (если dumpSavingsAtSlip) сначала вносит
+ *   все накопления в долг.
+ * - Обязательный платёж вносится всегда, даже если freeMonthly меньше него.
+ * - После полного погашения долга весь freeMonthly инвестируется.
+ * - Налоговые вычеты (при salary != null) начисляются в конце каждого года:
+ *   база года = 12×зарплата, сначала расходуется имущественная база
+ *   (до 2 млн), затем процентная (фактические проценты, суммарно до 3 млн);
+ *   возврат = разница НДФЛ по прогрессивной шкале. Неиспользованные базы
+ *   переносятся на следующие годы. Возврат у save идёт в накопления,
+ *   у prepay — в досрочное погашение (после погашения долга — в накопления).
  */
-function calcDeductionReturn(annualSalary: number, deductionBase: number): number {
-  if (deductionBase <= 0 || annualSalary <= 0) return 0;
-  const taxBefore = calcActualNDFL(annualSalary);
-  const taxAfter = calcActualNDFL(Math.max(0, annualSalary - deductionBase));
-  return taxBefore - taxAfter;
+function simulateStrategy(params: MortgageParams, opts: SimOptions): SimResult {
+  const { apartmentPrice, downPayment, itRate, termYears, freeMonthly, depositRate, horizonYears, keyRate, bankDiscount, salary } = params;
+  const { strategy, slipMonth, dumpSavingsAtSlip } = opts;
+
+  const loanAmount = Math.max(0, apartmentPrice - downPayment);
+  const n = termYears * 12;
+  const horizonMonths = horizonYears * 12;
+  const rIt = itRate / 12 / 100;
+  const rMarket = (keyRate - bankDiscount + 1.5) / 12 / 100;
+  const rDeposit = depositRate / 12 / 100;
+
+  let debt = loanAmount;
+  let savings = 0;
+  let rate = rIt;
+  // Обязательный аннуитет. Для save фиксируется до слёта; для prepay пересчитывается ежемесячно.
+  let pmt = calcPMT(loanAmount, rate, n);
+
+  let totalPaid = 0;
+  let totalInterest = 0;
+  let investmentIncome = 0;
+  let debtFreeMonth: number | null = debt <= 0 ? 0 : null;
+
+  // Налоговые базы (переносятся между годами)
+  const annualIncome = salary !== null ? salary * 12 : 0;
+  let propertyBaseRemaining = salary !== null ? Math.min(PROPERTY_DEDUCTION_BASE_LIMIT, apartmentPrice) : 0;
+  let interestBaseRemaining = INTEREST_DEDUCTION_BASE_LIMIT;
+  /** Уплаченные проценты, ещё не заявленные к вычету (перенос между годами) */
+  let interestDeductiblePool = 0;
+
+  let taxReturnTotal = 0;
+  let propertyReturnTotal = 0;
+  let interestReturnTotal = 0;
+  const taxByYear: Array<{ year: number; amount: number; propertyReturn: number }> = [];
+
+  const points: SimPoint[] = new Array(horizonMonths + 1);
+  points[0] = { month: 0, debt, savings, payment: pmt };
+
+  /** Досрочное внесение суммы в долг с пересчётом аннуитета (в конце месяца t) */
+  const prepayIntoDebt = (amount: number, t: number): number => {
+    const applied = Math.min(amount, debt);
+    debt -= applied;
+    totalPaid += applied;
+    if (debt <= 0.005) {
+      debt = 0;
+      if (debtFreeMonth === null) debtFreeMonth = t;
+      pmt = 0;
+    } else if (strategy === 'save') {
+      // save пересчитывает аннуитет только на событиях (слёт/вычет-в-досрочку не бывает)
+      pmt = calcPMT(debt, rate, Math.max(1, n - t));
+    }
+    return applied;
+  };
+
+  for (let t = 1; t <= horizonMonths; t++) {
+    // --- Ежемесячный платёж ---
+    if (debt > 0 && t <= n) {
+      const interest = debt * rate;
+      totalInterest += interest;
+      interestDeductiblePool += interest;
+
+      // Обязательный платёж (не больше полного закрытия долга)
+      const mandatory = Math.min(pmt, debt + interest);
+
+      let payment: number;
+      if (strategy === 'prepay') {
+        // Весь бюджет в платёж; не меньше обязательного, не больше полного закрытия
+        payment = Math.min(Math.max(mandatory, freeMonthly), debt + interest);
+      } else {
+        payment = mandatory;
+      }
+
+      debt = Math.max(0, debt - (payment - interest));
+      totalPaid += payment;
+
+      if (debt <= 0.005) {
+        debt = 0;
+        if (debtFreeMonth === null) debtFreeMonth = t;
+        pmt = 0;
+      } else if (strategy === 'prepay') {
+        // Досрочка с уменьшением платежа: аннуитет пересчитывается каждый месяц
+        pmt = calcPMT(debt, rate, Math.max(1, n - t));
+      }
+
+      // Остаток бюджета инвестируется (для prepay остаётся только после закрытия долга)
+      const invest = Math.max(0, freeMonthly - payment);
+      const earned = savings * rDeposit;
+      investmentIncome += earned;
+      savings += earned + invest;
+    } else {
+      // Долг погашен (или срок вышел) — инвестируем весь бюджет
+      const earned = savings * rDeposit;
+      investmentIncome += earned;
+      savings += earned + freeMonthly;
+    }
+
+    // --- Слёт (в конце месяца slipMonth) ---
+    if (slipMonth > 0 && t === slipMonth && debt > 0 && t < n) {
+      rate = rMarket;
+      if (strategy === 'save' && dumpSavingsAtSlip && savings > 0) {
+        const applied = prepayIntoDebt(savings, t);
+        savings -= applied;
+      }
+      if (debt > 0) {
+        pmt = calcPMT(debt, rate, n - t);
+      }
+    }
+
+    // --- Налоговые вычеты (конец года) ---
+    if (salary !== null && t % 12 === 0) {
+      // Имущественная база расходуется первой, процентная — из остатка дохода
+      const propUse = Math.min(propertyBaseRemaining, annualIncome);
+      const intUse = Math.min(interestDeductiblePool, interestBaseRemaining, Math.max(0, annualIncome - propUse));
+
+      const taxFull = calcActualNDFL(annualIncome);
+      const taxAfterProperty = calcActualNDFL(annualIncome - propUse);
+      const taxAfterBoth = calcActualNDFL(annualIncome - propUse - intUse);
+
+      const propertyReturn = taxFull - taxAfterProperty;
+      const interestReturn = taxAfterProperty - taxAfterBoth;
+      const totalReturn = propertyReturn + interestReturn;
+
+      propertyBaseRemaining -= propUse;
+      interestBaseRemaining -= intUse;
+      interestDeductiblePool -= intUse;
+
+      propertyReturnTotal += propertyReturn;
+      interestReturnTotal += interestReturn;
+      taxReturnTotal += totalReturn;
+      taxByYear.push({
+        year: t / 12,
+        amount: Math.round(totalReturn),
+        propertyReturn: Math.round(propertyReturn),
+      });
+
+      // Возврат: save — в накопления, prepay — в досрочку (или в накопления, если долга нет)
+      if (totalReturn > 0) {
+        if (strategy === 'prepay' && debt > 0) {
+          const applied = prepayIntoDebt(totalReturn, t);
+          pmt = debt > 0 ? calcPMT(debt, rate, Math.max(1, n - t)) : 0;
+          savings += totalReturn - applied;
+        } else {
+          savings += totalReturn;
+        }
+      }
+    }
+
+    points[t] = { month: t, debt, savings, payment: pmt };
+  }
+
+  return {
+    points,
+    totalPaid,
+    totalInterest,
+    taxReturnTotal,
+    propertyReturnTotal,
+    interestReturnTotal,
+    taxByYear,
+    investmentIncome,
+    debtFreeMonth,
+  };
 }
 
 // ---------------------------------------------------------------------------
 // Основная функция
 // ---------------------------------------------------------------------------
 
+/** Итоги стратегии из результата симуляции */
+function toStrategyResult(sim: SimResult): StrategyResult {
+  const last = sim.points[sim.points.length - 1];
+  return {
+    netWorth: Math.round(last.savings - last.debt),
+    savings: Math.round(last.savings),
+    debt: Math.round(last.debt),
+    totalPaid: Math.round(sim.totalPaid),
+    totalInterest: Math.round(sim.totalInterest),
+    taxReturnTotal: Math.round(sim.taxReturnTotal),
+    investmentIncome: Math.round(sim.investmentIncome),
+    debtFreeMonth: sim.debtFreeMonth,
+  };
+}
+
 /**
- * Рассчитывает сравнение двух ипотечных стратегий.
- *
- * Стратегия А — досрочное погашение с уменьшением платежа:
- *   весь freeMonthly каждый месяц = текущий аннуитет + досрочка.
- *
- * Стратегия Б — минимальный платёж + инвестиции:
- *   платится базовый PMT, остаток freeMonthly инвестируется под depositRate.
- *
- * @param params - входные параметры
- * @returns полный результат расчёта
+ * Рассчитывает сравнение подходов «гасить досрочно» и «копить»
+ * с учётом сценария слёта с льготной программы.
  */
 export function calculate(params: MortgageParams): CalculationResult {
-  const {
-    apartmentPrice,
-    downPayment,
-    itRate,
-    termYears,
-    freeMonthly,
-    depositRate,
-    horizonYears,
-    slipMonth,
-    keyRate,
-    bankDiscount,
-    salary,
-  } = params;
+  const { apartmentPrice, downPayment, itRate, termYears, horizonYears, keyRate, bankDiscount, salary } = params;
 
-  // -------------------------------------------------------------------------
-  // 1. Базовые параметры
-  // -------------------------------------------------------------------------
   const loanAmount = Math.max(0, apartmentPrice - downPayment);
-  const r = itRate / 12 / 100;           // месячная льготная ставка в долях
-  const n = termYears * 12;              // полный срок в месяцах
+  const n = termYears * 12;
   const horizonMonths = horizonYears * 12;
+  const rIt = itRate / 12 / 100;
 
-  const rawMinPayment = calcPMT(loanAmount, r, n);
-  const minPayment = Math.round(rawMinPayment); // базовый аннуитет, округлённый
-  const totalInterest = Math.round(minPayment * n - loanAmount);
+  const rawMinPayment = calcPMT(loanAmount, rIt, n);
+  const minPayment = Math.round(rawMinPayment);
+  const totalInterest = Math.round(rawMinPayment * n - loanAmount);
+
+  const marketRateAtSlip = keyRate - bankDiscount + 1.5;
+  const rMarket = marketRateAtSlip / 12 / 100;
+
+  // Слёт после конца срока или за горизонтом смысла не имеет
+  const effectiveSlip = params.slipMonth > 0 && params.slipMonth < n ? Math.min(params.slipMonth, horizonMonths) : 0;
 
   // -------------------------------------------------------------------------
-  // 2. Рыночная ставка при слёте
+  // Симуляции: базовые всегда, слётные — при slipMonth > 0
   // -------------------------------------------------------------------------
-  const marketRateAtSlip = keyRate - bankDiscount + 1.5; // % годовых
-  const r_market = marketRateAtSlip / 12 / 100;          // месячная в долях
+  const basePrepay = simulateStrategy(params, { strategy: 'prepay', slipMonth: 0, dumpSavingsAtSlip: false });
+  const baseSave = simulateStrategy(params, { strategy: 'save', slipMonth: 0, dumpSavingsAtSlip: false });
+
+  const hasSlip = effectiveSlip > 0;
+  const slipPrepay = hasSlip
+    ? simulateStrategy(params, { strategy: 'prepay', slipMonth: effectiveSlip, dumpSavingsAtSlip: false })
+    : basePrepay;
+  const slipSaveDump = hasSlip
+    ? simulateStrategy(params, { strategy: 'save', slipMonth: effectiveSlip, dumpSavingsAtSlip: true })
+    : baseSave;
+  const slipSaveNoDump = hasSlip
+    ? simulateStrategy(params, { strategy: 'save', slipMonth: effectiveSlip, dumpSavingsAtSlip: false })
+    : baseSave;
+
+  // Отображаемый сценарий: со слётом, если он задан
+  const shownPrepay = slipPrepay;
+  const shownSave = slipSaveDump;
 
   // -------------------------------------------------------------------------
-  // 3. Симуляция по месяцам
+  // Помесячный ряд отображаемого сценария
   // -------------------------------------------------------------------------
-
-  // Состояния для обеих стратегий
-  let debtA = loanAmount;
-  let debtB = loanAmount;
-  let savingsB = 0;
-  // Используем точное (не округлённое) PMT для внутренних расчётов
-  let currentPMT_A = rawMinPayment;
-
-  let interestPaidA = 0;
-  let interestPaidB = 0;
-  let totalPaidA = 0;
-  let totalPaidB = 0;
-
-  // Серия точек, индекс = номер месяца
   const series: MonthlyPoint[] = new Array(horizonMonths + 1);
-
-  // Месяц 0 — начальное состояние
-  series[0] = {
-    month: 0,
-    debtA: Math.round(debtA),
-    savingsA: 0,
-    netWorthA: Math.round(-debtA),
-    minPaymentA: Math.round(currentPMT_A),
-    debtB: Math.round(debtB),
-    savingsB: Math.round(savingsB),
-    netWorthB: Math.round(savingsB - debtB),
-  };
-
-  // -------------------------------------------------------------------------
-  // Налоговые вычеты: предрасчёт параметров
-  // -------------------------------------------------------------------------
-  let ndflRate = 0;
-  let annualSalary = 0;
-  // maxReturnPerYear — фактически уплаченный НДФЛ за год (по прогрессивной шкале).
-  // Это максимум который можно вернуть вычетами за один год.
-  let maxReturnPerYear = 0;
-  // propertyDeductionTotal — полная сумма возврата за покупку (вычет с базы до 2М).
-  // Считается правильно: уменьшение налоговой базы на buyBase → разница НДФЛ.
-  let propertyDeductionTotal = 0;
-
-  if (salary !== null) {
-    annualSalary = salary * 12;
-    ndflRate = calcNDFLRate(annualSalary);
-    // Фактически уплаченный НДФЛ за год по прогрессивным ступеням
-    maxReturnPerYear = calcActualNDFL(annualSalary);
-    // Имущественный вычет: база = min(2 000 000, цена квартиры)
-    // Возврат = НДФЛ(доход) - НДФЛ(доход - база) — корректная прогрессивная формула
-    const buyBase = Math.min(2_000_000, apartmentPrice);
-    propertyDeductionTotal = calcDeductionReturn(annualSalary, buyBase);
-  }
-
-  let remainingPropertyDeduction = propertyDeductionTotal;
-  // Накопленная база вычета по процентам (лимит 3 000 000 ₽ за всю жизнь кредита)
-  let cumulativeInterestBase = 0;
-  const interestDeductionLimit = 3_000_000;
-
-  const taxByYear: Array<{ year: number; amount: number; propertyReturn: number }> = [];
-  let totalInterestDeduction = 0;
-
-  // Накопитель процентов Б за текущий год (сбрасывается каждые 12 мес)
-  let interestBThisYear = 0;
-
-  // -------------------------------------------------------------------------
-  // Основной цикл
-  // -------------------------------------------------------------------------
-  for (let t = 1; t <= horizonMonths; t++) {
-
-    // --- Стратегия Б (фиксированный аннуитет) ---
-    let interestB: number;
-    let actualPaymentB: number;
-
-    if (debtB <= 0) {
-      // Долг погашен — платежей нет, накопления продолжают расти
-      interestB = 0;
-      actualPaymentB = 0;
-      debtB = 0;
-    } else {
-      interestB = debtB * r;
-      const principalB = Math.min(rawMinPayment - interestB, debtB);
-      debtB = Math.max(0, debtB - principalB);
-      actualPaymentB = rawMinPayment; // точное PMT для корректного погашения
-    }
-
-    const investMonthly = Math.max(0, freeMonthly - actualPaymentB);
-    savingsB = savingsB * (1 + depositRate / 12 / 100) + investMonthly;
-
-    interestPaidB += interestB;
-    totalPaidB += actualPaymentB;
-    interestBThisYear += interestB;
-
-    // --- Стратегия А (досрочное погашение с уменьшением платежа) ---
-    let interestA: number;
-    let actualPaymentA: number;
-
-    if (debtA <= 0) {
-      debtA = 0;
-      interestA = 0;
-      actualPaymentA = 0;
-      currentPMT_A = 0;
-    } else {
-      interestA = debtA * r;
-
-      // Аннуитетная часть (тело долга в рамках текущего аннуитета)
-      let principalA = currentPMT_A - interestA;
-      if (principalA < 0) principalA = 0; // защита от отрицательного тела
-
-      // Досрочное погашение сверх текущего аннуитета
-      const extraPayment = Math.max(0, freeMonthly - currentPMT_A);
-
-      const debtBefore = debtA;
-      debtA = Math.max(0, debtA - principalA - extraPayment);
-
-      // Фактический платёж не превышает полный остаток + начисленные проценты
-      actualPaymentA = Math.min(freeMonthly, debtBefore + interestA);
-
-      interestPaidA += interestA;
-      totalPaidA += actualPaymentA;
-
-      // Пересчёт аннуитета для следующего месяца (ALGORITHMS.md §3.2 п.7)
-      const remainingN = n - t;
-      if (debtA > 0 && remainingN > 0) {
-        currentPMT_A = calcPMT(debtA, r, remainingN);
-      } else if (debtA > 0 && remainingN === 0) {
-        currentPMT_A = debtA; // последний платёж = весь остаток
-      } else {
-        currentPMT_A = 0; // долг погашен
-      }
-    }
-
-    // --- Налоговые вычеты (конец года, t кратен 12) ---
-    if (salary !== null && t % 12 === 0) {
-      const year = t / 12;
-
-      // Имущественный вычет за покупку (распределяется по годам в меру уплаченного НДФЛ)
-      let propertyReturnThisYear = 0;
-      if (remainingPropertyDeduction > 0) {
-        propertyReturnThisYear = Math.min(remainingPropertyDeduction, maxReturnPerYear);
-        remainingPropertyDeduction -= propertyReturnThisYear;
-      }
-
-      // Вычет по процентам за текущий год.
-      // База вычета — фактически уплаченные за год проценты по ипотеке (стратегия Б).
-      // Лимит базы за весь срок — 3 000 000 ₽.
-      // Возврат считается корректно через прогрессивную шкалу:
-      // уменьшение налоговой базы на сумму процентов → разница НДФЛ.
-      let interestReturnThisYear = 0;
-      if (cumulativeInterestBase < interestDeductionLimit) {
-        const deductibleThisYear = Math.min(
-          interestBThisYear,
-          interestDeductionLimit - cumulativeInterestBase,
-        );
-        cumulativeInterestBase += deductibleThisYear;
-        // Возврат: уменьшение базы на deductibleThisYear
-        // Используем оставшийся доход после учёта имущественного вычета
-        // (вычеты применяются последовательно, уменьшая базу)
-        const usedPropertyBase = remainingPropertyDeduction > 0
-          ? 0  // имущественный ещё не выбран — проценты вычитаются из той же базы
-          : 0; // упрощение: считаем возврат по процентам независимо
-        // NOTE: строго говоря оба вычета уменьшают одну налоговую базу.
-        // Суммарный возврат за год ≤ уплаченному НДФЛ за год.
-        // Считаем возврат по процентам от текущей зарплаты (без учёта уже применённого вычета).
-        // Это небольшое упрощение: при высоких зарплатах и больших процентах ≈ точно.
-        void usedPropertyBase; // подавить lint
-        interestReturnThisYear = calcDeductionReturn(annualSalary, deductibleThisYear);
-
-        // Суммарный возврат (имущественный + процентный) ≤ уплаченному НДФЛ за год
-        const remainingNDFL = Math.max(0, maxReturnPerYear - propertyReturnThisYear);
-        interestReturnThisYear = Math.min(interestReturnThisYear, remainingNDFL);
-      }
-
-      const totalReturnThisYear = propertyReturnThisYear + interestReturnThisYear;
-      taxByYear.push({
-        year,
-        amount: Math.round(totalReturnThisYear),
-        propertyReturn: Math.round(propertyReturnThisYear),
-      });
-      totalInterestDeduction += interestReturnThisYear;
-
-      // Налоговый возврат инвестируется в накопления Б
-      savingsB += totalReturnThisYear;
-
-      // Сбрасываем накопитель процентов за год
-      interestBThisYear = 0;
-    }
-
-    // Записываем точку ряда
+  for (let t = 0; t <= horizonMonths; t++) {
+    const p = shownPrepay.points[t];
+    const s = shownSave.points[t];
     series[t] = {
       month: t,
-      debtA: Math.round(debtA),
-      savingsA: 0,
-      netWorthA: Math.round(-debtA),
-      minPaymentA: Math.round(currentPMT_A),
-      debtB: Math.round(debtB),
-      savingsB: Math.round(savingsB),
-      netWorthB: Math.round(savingsB - debtB),
+      debtPrepay: Math.round(p.debt),
+      savingsPrepay: Math.round(p.savings),
+      netWorthPrepay: Math.round(p.savings - p.debt),
+      paymentPrepay: Math.round(p.payment),
+      debtSave: Math.round(s.debt),
+      savingsSave: Math.round(s.savings),
+      netWorthSave: Math.round(s.savings - s.debt),
+      paymentSave: Math.round(s.payment),
     };
   }
 
   // -------------------------------------------------------------------------
-  // 4. slipAnalysis — анализ слёта для каждого месяца 1..horizonMonths
-  //    ALGORITHMS.md §5.2:
-  //    paymentWithoutPrepay = PMT(debtB(t), r_market, remainingMonths)
-  //    paymentWithPrepay    = PMT(max(0, debtB(t) - savingsB(t)), r_market, remainingMonths)
+  // Анализ слёта по месяцам (база — сценарий «копить» без слёта):
+  // если слёт случится в месяц t, каким станет платёж
   // -------------------------------------------------------------------------
   const slipAnalysis: SlipPoint[] = [];
-
   for (let t = 1; t <= horizonMonths; t++) {
-    const pt = series[t];
+    const pt = baseSave.points[t];
     const remainingMonths = n - t;
 
-    let paymentWithPrepay: number;
-    let paymentWithoutPrepay: number;
-
-    if (remainingMonths <= 0) {
-      paymentWithPrepay = 0;
-      paymentWithoutPrepay = 0;
-    } else {
-      // Без применения накоплений
-      paymentWithoutPrepay = pt.debtB > 0
-        ? calcPMT(pt.debtB, r_market, remainingMonths)
-        : 0;
-
-      // С применением накоплений Б к долгу Б
-      const debtAfterPrepayB = Math.max(0, pt.debtB - pt.savingsB);
-      paymentWithPrepay = debtAfterPrepayB > 0
-        ? calcPMT(debtAfterPrepayB, r_market, remainingMonths)
-        : 0;
+    let paymentWithPrepay = 0;
+    let paymentWithoutPrepay = 0;
+    if (remainingMonths > 0 && pt.debt > 0) {
+      paymentWithoutPrepay = calcPMT(pt.debt, rMarket, remainingMonths);
+      const debtAfter = Math.max(0, pt.debt - pt.savings);
+      paymentWithPrepay = debtAfter > 0 ? calcPMT(debtAfter, rMarket, remainingMonths) : 0;
     }
 
     slipAnalysis.push({
@@ -539,116 +575,74 @@ export function calculate(params: MortgageParams): CalculationResult {
     });
   }
 
-  // -------------------------------------------------------------------------
-  // 5. Точка безопасности (safetyPoint)
-  //    Первый индекс (0-based) в slipAnalysis, где paymentWithPrepay <= minPayment.
-  //    ALGORITHMS.md §6.2.
-  //
-  //    NOTE: возвращаем индекс в slipAnalysis (0-based), а не slipMonth,
-  //    потому что тесты обращаются к slipAnalysis[safetyPoint] напрямую.
-  // -------------------------------------------------------------------------
-  let safetyPoint: number | null = null;
-  for (let i = 0; i < slipAnalysis.length; i++) {
-    if (slipAnalysis[i].paymentWithPrepay <= minPayment) {
-      safetyPoint = i;
+  // Точка безопасности: первый месяц, где платёж-после-слёта ≤ льготному
+  let safetyMonth: number | null = null;
+  for (const pt of slipAnalysis) {
+    if (pt.paymentWithPrepay <= minPayment) {
+      safetyMonth = pt.slipMonth;
       break;
     }
   }
 
-  // -------------------------------------------------------------------------
-  // 6. slipScenario — детальный сценарий для конкретного slipMonth
-  //    ALGORITHMS.md §5.3: применяем накопления Б к долгу Б.
-  //    D_new_B = max(0, D_B(slip) - S_B(slip))
-  //    S_new_B = max(0, S_B(slip) - D_B(slip))
-  //    Обрабатываем slipMonth=0 как t=0 (начальное состояние).
-  // -------------------------------------------------------------------------
-  const slipScenarioResult = (() => {
-    // Ограничиваем slipMonth длиной series (защита от значений > horizonMonths)
-    const clampedSlip = Math.min(Math.max(0, slipMonth), horizonMonths);
-    const pt = series[clampedSlip];
-
-    const debtAtSlip = pt.debtB;     // долг Б в момент слёта
-    const savingsAtSlip = pt.savingsB; // накопления Б в момент слёта
-
-    // Применяем накопления Б к долгу Б (ALGORITHMS.md §5.3)
-    const debtAfterPrepay = Math.max(0, debtAtSlip - savingsAtSlip);
-    const savingsAfterPrepay = Math.max(0, savingsAtSlip - debtAtSlip);
-
-    const remainingMonths = Math.max(0, n - clampedSlip);
-
-    let paymentWithPrepay: number;
-    let paymentWithoutPrepay: number;
-
-    if (remainingMonths <= 0) {
-      paymentWithPrepay = 0;
-      paymentWithoutPrepay = 0;
-    } else {
-      paymentWithPrepay = debtAfterPrepay > 0
-        ? calcPMT(debtAfterPrepay, r_market, remainingMonths)
-        : 0;
-      paymentWithoutPrepay = debtAtSlip > 0
-        ? calcPMT(debtAtSlip, r_market, remainingMonths)
-        : 0;
+  // Точка полного погашения: накоплений хватает, чтобы закрыть долг
+  let payoffMonth: number | null = null;
+  if (loanAmount > 0) {
+    for (let t = 1; t <= horizonMonths; t++) {
+      const pt = baseSave.points[t];
+      if (pt.savings >= pt.debt) {
+        payoffMonth = t;
+        break;
+      }
     }
+  }
 
-    return {
+  // -------------------------------------------------------------------------
+  // Детали слёта
+  // -------------------------------------------------------------------------
+  let slip: SlipDetails | null = null;
+  if (hasSlip) {
+    const at = baseSave.points[effectiveSlip];
+    const debtAfterPrepay = Math.max(0, at.debt - at.savings);
+    const savingsAfterPrepay = Math.max(0, at.savings - at.debt);
+    const remainingMonths = Math.max(0, n - effectiveSlip);
+
+    const netWorthAt = (sim: SimResult) => {
+      const last = sim.points[sim.points.length - 1];
+      return last.savings - last.debt;
+    };
+
+    slip = {
       marketRate: marketRateAtSlip,
-      debtAtSlip: Math.round(debtAtSlip),
-      savingsAtSlip: Math.round(savingsAtSlip),
+      debtAtSlip: Math.round(at.debt),
+      savingsAtSlip: Math.round(at.savings),
       debtAfterPrepay: Math.round(debtAfterPrepay),
       savingsAfterPrepay: Math.round(savingsAfterPrepay),
-      paymentWithPrepay: Math.round(paymentWithPrepay),
-      paymentWithoutPrepay: Math.round(paymentWithoutPrepay),
+      paymentWithPrepay: Math.round(debtAfterPrepay > 0 && remainingMonths > 0 ? calcPMT(debtAfterPrepay, rMarket, remainingMonths) : 0),
+      paymentWithoutPrepay: Math.round(at.debt > 0 && remainingMonths > 0 ? calcPMT(at.debt, rMarket, remainingMonths) : 0),
       remainingMonths,
-    };
-  })();
-
-  // -------------------------------------------------------------------------
-  // 7. Налоговые вычеты (итог)
-  // -------------------------------------------------------------------------
-  let tax: TaxInfo | null = null;
-  if (salary !== null) {
-    const buyBase = Math.min(2_000_000, apartmentPrice);
-    // Возврат считается как разница НДФЛ с вычетом и без (прогрессивная шкала)
-    const deductionBuy = Math.round(calcDeductionReturn(annualSalary, buyBase));
-
-    tax = {
-      ndflRate,
-      deductionBuy,
-      deductionInterestTotal: Math.round(totalInterestDeduction),
-      byYear: taxByYear,
+      slipLoss: Math.round(netWorthAt(baseSave) - netWorthAt(slipSaveDump)),
+      dumpBenefit: Math.round(netWorthAt(slipSaveDump) - netWorthAt(slipSaveNoDump)),
     };
   }
 
   // -------------------------------------------------------------------------
-  // 8. Итоги (summary)
+  // Налоговые вычеты (отображаемый сценарий «копить»)
   // -------------------------------------------------------------------------
-  const horizonPoint = series[horizonMonths];
+  let tax: TaxInfo | null = null;
+  if (salary !== null) {
+    tax = {
+      ndflRate: calcNDFLRate(salary * 12),
+      propertyReturnTotal: Math.round(shownSave.propertyReturnTotal),
+      interestReturnTotal: Math.round(shownSave.interestReturnTotal),
+      byYear: shownSave.taxByYear,
+    };
+  }
 
-  const resultA: StrategyResult = {
-    netWorth: horizonPoint.netWorthA,
-    savings: 0,
-    debt: horizonPoint.debtA,
-    totalPaid: Math.round(totalPaidA),
-    totalInterest: Math.round(interestPaidA),
-  };
-
-  const resultB: StrategyResult = {
-    netWorth: horizonPoint.netWorthB,
-    savings: horizonPoint.savingsB,
-    debt: horizonPoint.debtB,
-    totalPaid: Math.round(totalPaidB),
-    totalInterest: Math.round(interestPaidB),
-  };
-
-  const nwA = horizonPoint.netWorthA;
-  const nwB = horizonPoint.netWorthB;
-  let winner: 'A' | 'B' | 'tie';
-  if (nwA > nwB) winner = 'A';
-  else if (nwB > nwA) winner = 'B';
-  else winner = 'tie';
-
-  const winnerDelta = Math.round(Math.abs(nwA - nwB));
+  // -------------------------------------------------------------------------
+  // Итоги
+  // -------------------------------------------------------------------------
+  const prepayResult = toStrategyResult(shownPrepay);
+  const saveResult = toStrategyResult(shownSave);
 
   return {
     loanAmount,
@@ -657,75 +651,14 @@ export function calculate(params: MortgageParams): CalculationResult {
     marketRateAtSlip,
     series,
     slipAnalysis,
-    safetyPoint,
-    slipScenario: slipScenarioResult,
+    safetyMonth,
+    payoffMonth,
+    slip,
     tax,
     summary: {
-      A: resultA,
-      B: resultB,
-      winner,
-      winnerDelta,
+      prepay: prepayResult,
+      save: saveResult,
+      advantageSave: saveResult.netWorth - prepayResult.netWorth,
     },
   };
-}
-
-// ---------------------------------------------------------------------------
-// SELF-TEST
-// Запускается только вне production-среды.
-// Тестовые данные из ALGORITHMS.md §9.
-//
-// Используем (globalThis as Record<string, unknown>) для доступа к process
-// без явной зависимости от @types/node, т.к. tsconfig.app.json ограничивает
-// types: ["vite/client"]. В браузере process отсутствует → блок не выполняется.
-// ---------------------------------------------------------------------------
-const _proc = (globalThis as Record<string, unknown>)['process'] as
-  | { env?: { NODE_ENV?: string } }
-  | undefined;
-
-if (_proc !== undefined && _proc.env?.NODE_ENV !== 'production') {
-  const _testParams: MortgageParams = {
-    apartmentPrice: 7_000_000,
-    downPayment: 1_500_000,
-    itRate: 6,
-    termYears: 20,
-    freeMonthly: 100_000,
-    depositRate: 16,
-    horizonYears: 10,
-    slipMonth: 36,
-    keyRate: 16,
-    bankDiscount: 0.5,
-    salary: null,
-  };
-
-  const _r = calculate(_testParams);
-
-  // 1. Сумма кредита
-  console.assert(
-    _r.loanAmount === 5_500_000,
-    `[SELF-TEST] loanAmount expected 5_500_000, got ${_r.loanAmount}`,
-  );
-
-  // 2. Базовый аннуитет в диапазоне 38_000–41_000
-  console.assert(
-    _r.minPayment >= 38_000 && _r.minPayment <= 41_000,
-    `[SELF-TEST] minPayment expected 38000–41000, got ${_r.minPayment}`,
-  );
-
-  // 3. Длина series = 121 (горизонт 10 лет × 12 + 1)
-  console.assert(
-    _r.series.length === 121,
-    `[SELF-TEST] series.length expected 121, got ${_r.series.length}`,
-  );
-
-  // 4. Длина slipAnalysis = 120
-  console.assert(
-    _r.slipAnalysis.length === 120,
-    `[SELF-TEST] slipAnalysis.length expected 120, got ${_r.slipAnalysis.length}`,
-  );
-
-  // 5. Рыночная ставка при слёте = 17%
-  console.assert(
-    _r.marketRateAtSlip === 17,
-    `[SELF-TEST] marketRateAtSlip expected 17, got ${_r.marketRateAtSlip}`,
-  );
 }

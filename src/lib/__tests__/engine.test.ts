@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { calculate } from '../engine'
+import { calculate, calcPMT } from '../engine'
 import type { MortgageParams } from '../engine'
 
 // ─── Фабрика параметров по умолчанию ───────────────────────────────────────
@@ -18,13 +18,14 @@ const defaultParams = (): MortgageParams => ({
   salary: null,
 })
 
+const noSlip = (): MortgageParams => ({ ...defaultParams(), slipMonth: 0 })
+
 // ─── 1. Базовые расчёты ────────────────────────────────────────────────────
 describe('базовые расчёты', () => {
-  it('минимальный платёж корректен: 5.5M, 6%, 20 лет → ~39 000–41 000 ₽', () => {
+  it('минимальный платёж корректен: 5.5M, 6%, 20 лет → ~39 404 ₽', () => {
     const result = calculate(defaultParams())
-    // ALGORITHMS.md §9.2: PMT ≈ 39 404 ₽
-    expect(result.minPayment).toBeGreaterThan(38_000)
-    expect(result.minPayment).toBeLessThan(41_000)
+    expect(result.minPayment).toBeGreaterThan(39_000)
+    expect(result.minPayment).toBeLessThan(39_900)
   })
 
   it('loanAmount = apartmentPrice - downPayment', () => {
@@ -36,359 +37,337 @@ describe('базовые расчёты', () => {
   it('series.length === horizonYears * 12 + 1', () => {
     const params = defaultParams()
     const result = calculate(params)
-    // series[0] — начальное состояние, далее по одному на каждый месяц
     expect(result.series.length).toBe(params.horizonYears * 12 + 1)
   })
 
   it('slipAnalysis.length === horizonYears * 12', () => {
     const params = defaultParams()
     const result = calculate(params)
-    // slipAnalysis перебирает t от 0 до horizonMonths-1 (или до horizonMonths?)
-    // По псевдокоду §5.2: t ОТ 0 ДО horizonMonths → horizonMonths+1 элементов,
-    // но задание явно требует horizonYears * 12. Оба варианта проверяем диапазоном.
-    const h = params.horizonYears * 12
-    expect(result.slipAnalysis.length).toBeGreaterThanOrEqual(h)
-    expect(result.slipAnalysis.length).toBeLessThanOrEqual(h + 1)
+    expect(result.slipAnalysis.length).toBe(params.horizonYears * 12)
   })
 
   it('marketRateAtSlip = keyRate - bankDiscount + 1.5', () => {
     const params = defaultParams()
     const result = calculate(params)
-    const expected = params.keyRate - params.bankDiscount + 1.5
-    expect(result.marketRateAtSlip).toBeCloseTo(expected, 5)
+    expect(result.marketRateAtSlip).toBeCloseTo(params.keyRate - params.bankDiscount + 1.5, 5)
+  })
+
+  it('series[0]: долг = loanAmount, накоплений нет', () => {
+    const result = calculate(defaultParams())
+    expect(result.series[0].debtPrepay).toBeCloseTo(result.loanAmount, -1)
+    expect(result.series[0].debtSave).toBeCloseTo(result.loanAmount, -1)
+    expect(result.series[0].savingsSave).toBe(0)
+    expect(result.series[0].savingsPrepay).toBe(0)
   })
 })
 
-// ─── 2. Стратегия А vs Б ──────────────────────────────────────────────────
-describe('стратегия А vs Б', () => {
-  it('при depositRate > itRate: netWorthB > netWorthA на горизонте 10 лет', () => {
-    // depositRate=16 >> itRate=6 → Б выгоднее
-    const result = calculate(defaultParams())
-    // netWorth_B = savingsB - debtB, netWorth_A = -debtA
+// ─── 2. Стратегии: гасить досрочно vs копить ───────────────────────────────
+describe('сравнение стратегий', () => {
+  it('при depositRate > itRate (без слёта): копить выгоднее', () => {
+    const result = calculate(noSlip())
+    expect(result.summary.save.netWorth).toBeGreaterThan(result.summary.prepay.netWorth)
+    expect(result.summary.advantageSave).toBeGreaterThan(0)
+  })
+
+  it('при depositRate === itRate стратегии эквивалентны (деньги фунгибельны)', () => {
+    // Ключевой инвариант v2: при равных ставках гасить долг под 6% и копить
+    // под 6% — одно и то же. В v1 это ломалось, т.к. после погашения долга
+    // свободные деньги стратегии «гасить» никуда не шли.
+    const params: MortgageParams = { ...noSlip(), depositRate: 6 }
+    const result = calculate(params)
+    const a = result.summary.prepay.netWorth
+    const b = result.summary.save.netWorth
+    expect(Math.abs(a - b)).toBeLessThan(Math.abs(a) * 0.005 + 1_000)
+  })
+
+  it('после полного погашения долга стратегия «гасить» инвестирует свободные деньги', () => {
+    // freeMonthly 200к → долг гасится задолго до горизонта
+    const params: MortgageParams = { ...noSlip(), freeMonthly: 200_000 }
+    const result = calculate(params)
+    const dfm = result.summary.prepay.debtFreeMonth
+    expect(dfm).not.toBeNull()
+    expect(dfm!).toBeLessThan(params.horizonYears * 12)
+    // после погашения накопления растут
     const last = result.series[result.series.length - 1]
-    const netWorthA = -last.debtA
-    const netWorthB = last.savingsB - last.debtB
-    expect(netWorthB).toBeGreaterThan(netWorthA)
+    expect(last.savingsPrepay).toBeGreaterThan(0)
+    expect(last.netWorthPrepay).toBeGreaterThan(0)
   })
 
-  it('при depositRate === itRate: стратегии дают схожее чистое состояние (±20%)', () => {
-    // При freeMonthly чуть выше PMT (~39 404) стратегии А и Б дают близкие результаты.
-    // При большом freeMonthly (100 000) стратегия А гасит долг раньше → netWorthA=0,
-    // стратегия Б накапливает сбережения → они не равны. Используем freeMonthly≈42 000.
-    const params: MortgageParams = { ...defaultParams(), depositRate: 6, freeMonthly: 42_000 }
-    const result = calculate(params)
-    expect(Math.abs(result.summary.A.netWorth - result.summary.B.netWorth))
-      .toBeLessThan(Math.abs(result.summary.A.netWorth) * 0.20)
-  })
-
-  it('debtA[t] <= debtB[t] для всех t (А всегда гасит быстрее)', () => {
-    const result = calculate(defaultParams())
+  it('debtPrepay[t] <= debtSave[t] для всех t (досрочка гасит быстрее)', () => {
+    const result = calculate(noSlip())
     for (const point of result.series) {
-      expect(point.debtA).toBeLessThanOrEqual(point.debtB + 1) // +1 ₽ допуск на округление
+      expect(point.debtPrepay).toBeLessThanOrEqual(point.debtSave + 1)
     }
   })
 
-  it('savingsB[t] >= savingsA[t] для всех t при depositRate > itRate', () => {
-    const result = calculate(defaultParams())
-    for (const point of result.series) {
-      // savingsA = 0 по алгоритму, savingsB >= 0
-      expect(point.savingsB).toBeGreaterThanOrEqual(point.savingsA - 1)
-    }
-  })
-
-  it('при freeMonthly === minPayment: нет досрочного погашения и нет инвестиций', () => {
-    const base = calculate(defaultParams())
-    const pmt = base.minPayment
-    const params: MortgageParams = { ...defaultParams(), freeMonthly: Math.round(pmt) }
+  it('при freeMonthly === minPayment стратегии идентичны', () => {
+    const base = calculate(noSlip())
+    const params: MortgageParams = { ...noSlip(), freeMonthly: base.minPayment }
     const result = calculate(params)
     const last = result.series[result.series.length - 1]
-    // Стратегия А: долг убывает только по базовому аннуитету (как Б)
-    // Допуск 1% на округление freeMonthly до целых рублей
-    expect(Math.abs(last.debtA - last.debtB)).toBeLessThan(last.debtB * 0.01 + 1000)
-    // savingsB ≈ 0 (нечего инвестировать)
-    expect(last.savingsB).toBeLessThan(pmt * 12) // не более одного года платежей
+    expect(Math.abs(last.debtPrepay - last.debtSave)).toBeLessThan(last.debtSave * 0.01 + 1_000)
+    expect(Math.abs(result.summary.advantageSave)).toBeLessThan(50_000)
   })
 })
 
-// ─── 3. Сценарий слёта ────────────────────────────────────────────────────
-describe('сценарий слёта', () => {
-  it('debtAfterPrepay = max(0, debtAtSlip - savingsAtSlip)', () => {
-    const params = defaultParams() // slipMonth=36
-    const result = calculate(params)
-    const slip = result.slipScenario
-    const seriesAtSlip = result.series[params.slipMonth]
-    const expected = Math.max(0, seriesAtSlip.debtB - seriesAtSlip.savingsB)
-    expect(slip.debtAfterPrepay).toBeCloseTo(expected, -1) // точность ~10 ₽
+// ─── 3. Сценарий слёта в симуляции ────────────────────────────────────────
+describe('слёт моделируется в основной симуляции', () => {
+  it('в месяц слёта копящий вносит все накопления в долг', () => {
+    const withSlip = calculate(defaultParams()) // slipMonth = 36
+    const without = calculate(noSlip())
+    const before = without.series[36]
+    const after = withSlip.series[36]
+    // долг после слёта = долг - накопления (базовые, до слёта серии совпадают)
+    const expectedDebt = Math.max(0, before.debtSave - before.savingsSave)
+    expect(after.debtSave).toBeCloseTo(expectedDebt, -2)
+    // накопления обнулились (долг был больше накоплений)
+    expect(after.savingsSave).toBeLessThan(1_000)
   })
 
-  it('marketRateAtSlip = keyRate - bankDiscount + 1.5', () => {
-    const params = defaultParams()
-    const result = calculate(params)
-    const expected = params.keyRate - params.bankDiscount + 1.5
-    expect(result.slipScenario.marketRate).toBeCloseTo(expected, 5)
-  })
-
-  it('newPaymentWithPrepay < newPaymentWithoutPrepay когда savingsAtSlip > 0', () => {
-    const params = defaultParams()
-    const result = calculate(params)
-    const seriesAtSlip = result.series[params.slipMonth]
-    if (seriesAtSlip.savingsB > 0) {
-      expect(result.slipScenario.paymentWithPrepay).toBeLessThan(
-        result.slipScenario.paymentWithoutPrepay
-      )
+  it('до слёта серии со слётом и без совпадают', () => {
+    const withSlip = calculate(defaultParams())
+    const without = calculate(noSlip())
+    for (let t = 0; t < 36; t++) {
+      expect(withSlip.series[t].debtSave).toBe(without.series[t].debtSave)
+      expect(withSlip.series[t].savingsSave).toBe(without.series[t].savingsSave)
+      expect(withSlip.series[t].debtPrepay).toBe(without.series[t].debtPrepay)
     }
   })
 
-  it('slipMonth=0: slipScenario все платёжные поля = 0 или равны начальному аннуитету по рыночной ставке', () => {
-    const params: MortgageParams = { ...defaultParams(), slipMonth: 0 }
-    const result = calculate(params)
-    const slip = result.slipScenario
-    // При t=0: S_B=0, D_new_B = loanAmount → платёж = аннуитет по рыночной ставке
-    // debtAfterPrepay = loanAmount (нет накоплений)
-    expect(slip.debtAfterPrepay).toBeCloseTo(result.loanAmount, -2)
-    // savingsAtSlip = 0
-    expect(result.series[0].savingsB).toBe(0)
+  it('после слёта платёж копящего пересчитан по рыночной ставке (≈33 890 ₽)', () => {
+    const result = calculate(defaultParams())
+    // ALGORITHMS.md §9.8
+    expect(result.slip).not.toBeNull()
+    expect(result.slip!.paymentWithPrepay).toBeGreaterThan(30_000)
+    expect(result.slip!.paymentWithPrepay).toBeLessThan(37_000)
+    // series отражает новый платёж
+    expect(result.series[36].paymentSave).toBeCloseTo(result.slip!.paymentWithPrepay, -2)
   })
 
-  it('slipScenario.remainingMonths = termYears*12 - slipMonth', () => {
-    const params = defaultParams()
+  it('платёж без внесения накоплений ≈ 75 551 ₽ (§9.7)', () => {
+    const result = calculate(defaultParams())
+    expect(result.slip!.paymentWithoutPrepay).toBeGreaterThan(71_000)
+    expect(result.slip!.paymentWithoutPrepay).toBeLessThan(80_000)
+  })
+
+  it('slipLoss > 0: слёт ухудшает итог', () => {
+    const result = calculate(defaultParams())
+    expect(result.slip!.slipLoss).toBeGreaterThan(0)
+  })
+
+  it('dumpBenefit > 0 при рыночной ставке выше доходности вклада', () => {
+    // market 17% > deposit 16% → внести накопления в долг выгодно
+    const result = calculate(defaultParams())
+    expect(result.slip!.dumpBenefit).toBeGreaterThan(0)
+  })
+
+  it('dumpBenefit < 0 при доходности вклада значительно выше рыночной ставки', () => {
+    // deposit 25% >> market 17% → выгоднее НЕ гасить, а держать деньги на вкладе
+    const params: MortgageParams = { ...defaultParams(), depositRate: 25 }
     const result = calculate(params)
-    const expected = params.termYears * 12 - params.slipMonth
-    expect(result.slipScenario.remainingMonths).toBe(expected)
+    expect(result.slip!.dumpBenefit).toBeLessThan(0)
+  })
+
+  it('слёт также переводит стратегию «гасить досрочно» на рыночную ставку', () => {
+    const withSlip = calculate(defaultParams())
+    const without = calculate(noSlip())
+    // при слёте досрочное погашение идёт медленнее (проценты съедают больше)
+    const lastSlip = withSlip.series[withSlip.series.length - 1]
+    const lastBase = without.series[without.series.length - 1]
+    expect(lastSlip.netWorthPrepay).toBeLessThan(lastBase.netWorthPrepay)
+  })
+
+  it('slipMonth за пределами горизонта — считается как без слёта', () => {
+    const params: MortgageParams = { ...defaultParams(), slipMonth: 999 }
+    expect(() => calculate(params)).not.toThrow()
+    const result = calculate(params)
+    expect(result.slip).toBeNull()
+    const base = calculate(noSlip())
+    expect(result.summary.save.netWorth).toBe(base.summary.save.netWorth)
+  })
+
+  it('детали слёта согласованы: debtAfterPrepay = max(0, debtAtSlip - savingsAtSlip)', () => {
+    const result = calculate(defaultParams())
+    const s = result.slip!
+    expect(s.debtAfterPrepay).toBeCloseTo(Math.max(0, s.debtAtSlip - s.savingsAtSlip), -1)
+    expect(s.remainingMonths).toBe(20 * 12 - 36)
   })
 })
 
-// ─── 4. Точка безопасности ────────────────────────────────────────────────
-describe('точка безопасности', () => {
-  it('при safetyPoint: slipAnalysis[safetyPoint-1].paymentWithPrepay <= minPayment', () => {
+// ─── 4. Точки: безопасность и полное погашение ─────────────────────────────
+describe('точка безопасности и точка полного погашения', () => {
+  it('safetyMonth: платёж-при-слёте ≤ льготному, месяцем раньше — больше', () => {
     const result = calculate(defaultParams())
-    if (result.safetyPoint !== null) {
-      const sp = result.safetyPoint
-      // slipAnalysis индексируется с 0, safetyPoint — номер месяца
-      const entry = result.slipAnalysis[sp]
-      expect(entry.paymentWithPrepay).toBeLessThanOrEqual(result.minPayment + 1)
+    expect(result.safetyMonth).not.toBeNull()
+    const m = result.safetyMonth!
+    const entry = result.slipAnalysis.find((p) => p.slipMonth === m)!
+    expect(entry.paymentWithPrepay).toBeLessThanOrEqual(result.minPayment + 1)
+    if (m > 1) {
+      const prev = result.slipAnalysis.find((p) => p.slipMonth === m - 1)!
+      expect(prev.paymentWithPrepay).toBeGreaterThan(result.minPayment - 1)
     }
   })
 
-  it('при safetyPoint-1: slipAnalysis[safetyPoint-2].paymentWithPrepay > minPayment (если safetyPoint > 1)', () => {
-    const result = calculate(defaultParams())
-    if (result.safetyPoint !== null && result.safetyPoint > 1) {
-      const sp = result.safetyPoint
-      const prevEntry = result.slipAnalysis[sp - 1]
-      expect(prevEntry.paymentWithPrepay).toBeGreaterThan(result.minPayment - 1)
+  it('больше свободных денег → точка безопасности не позже', () => {
+    const fast = calculate({ ...defaultParams(), freeMonthly: 200_000 })
+    const slow = calculate(defaultParams())
+    if (fast.safetyMonth !== null && slow.safetyMonth !== null) {
+      expect(fast.safetyMonth).toBeLessThanOrEqual(slow.safetyMonth)
     }
   })
 
-  it('при очень высоком freeMonthly: safetyPoint достигается быстро', () => {
-    const params: MortgageParams = { ...defaultParams(), freeMonthly: 200_000 }
+  it('payoffMonth: накоплений хватает закрыть долг; месяцем раньше — нет', () => {
+    const result = calculate(noSlip())
+    expect(result.payoffMonth).not.toBeNull()
+    const m = result.payoffMonth!
+    expect(result.series[m].savingsSave).toBeGreaterThanOrEqual(result.series[m].debtSave)
+    expect(result.series[m - 1].savingsSave).toBeLessThan(result.series[m - 1].debtSave)
+  })
+
+  it('payoffMonth = null при слишком коротком горизонте', () => {
+    const params: MortgageParams = { ...noSlip(), horizonYears: 3 }
     const result = calculate(params)
-    // При 200к/мес накопления растут быстро → безопасность достигается раньше
-    if (result.safetyPoint !== null) {
-      const resultDefault = calculate(defaultParams())
-      const defaultSP = resultDefault.safetyPoint ?? Infinity
-      expect(result.safetyPoint).toBeLessThanOrEqual(defaultSP)
-    }
-  })
-
-  it('при очень низком freeMonthly: safetyPoint === null или достигается поздно', () => {
-    // freeMonthly ≈ minPayment → почти нет инвестиций → нет точки безопасности в горизонте
-    const base = calculate(defaultParams())
-    const pmt = base.minPayment
-    const params: MortgageParams = {
-      ...defaultParams(),
-      freeMonthly: Math.round(pmt) + 100, // чуть больше PMT — почти нет инвестиций
-    }
-    const result = calculate(params)
-    const defaultResult = calculate(defaultParams())
-    const defaultSP = defaultResult.safetyPoint ?? 0
-    // Либо точки нет, либо она позже дефолтной
-    if (result.safetyPoint !== null) {
-      expect(result.safetyPoint).toBeGreaterThanOrEqual(defaultSP)
-    } else {
-      expect(result.safetyPoint).toBeNull()
-    }
+    expect(result.payoffMonth).toBeNull()
   })
 })
 
 // ─── 5. Налоговые вычеты ──────────────────────────────────────────────────
 describe('налоговые вычеты', () => {
-  it('salary=null → tax=null', () => {
-    const params: MortgageParams = { ...defaultParams(), salary: null }
-    const result = calculate(params)
+  it('salary=null → tax=null и нулевые возвраты', () => {
+    const result = calculate({ ...noSlip(), salary: null })
     expect(result.tax).toBeNull()
+    expect(result.summary.save.taxReturnTotal).toBe(0)
+    expect(result.summary.prepay.taxReturnTotal).toBe(0)
   })
 
-  it('salary=150_000 → ndflRate=0.13, deductionBuy=234_000', () => {
-    // annualIncome = 150_000 * 12 = 1_800_000 <= 2_400_000 → маргинальная ставка 13%
-    // propertyDeductionBase = min(2_000_000, 7_000_000) = 2_000_000
-    // Возврат = НДФЛ(1_800_000) - НДФЛ(max(0, 1_800_000 - 2_000_000))
-    //         = 1_800_000 * 13% - 0 = 234_000 ₽
-    // Нельзя вернуть больше уплаченного НДФЛ за год (234_000 < 260_000).
-    // Остаток лимита (26_000) переносится на следующий год.
-    const params: MortgageParams = { ...defaultParams(), salary: 150_000 }
-    const result = calculate(params)
+  it('salary=150 000: имущественный возврат ограничен уплаченным НДФЛ и лимитом 260 000', () => {
+    // Годовой доход 1.8М (13%) < базы 2М → в первый год возврат = весь НДФЛ = 234 000,
+    // остаток базы (200 000) переносится: во второй год ещё 26 000. Итого 260 000.
+    const result = calculate({ ...noSlip(), salary: 150_000 })
     expect(result.tax).not.toBeNull()
     expect(result.tax!.ndflRate).toBeCloseTo(0.13, 5)
-    expect(result.tax!.deductionBuy).toBeCloseTo(234_000, -1)
+    expect(result.tax!.byYear[0].propertyReturn).toBeCloseTo(234_000, -2)
+    expect(result.tax!.propertyReturnTotal).toBeCloseTo(260_000, -2)
   })
 
-  it('salary=417_000 (5M/год) → ndflRate=0.15', () => {
-    // annualIncome = 417_000 * 12 = 5_004_000 > 5_000_000 → 0.18
-    // Точнее: 416_666 * 12 = 4_999_992 → 0.15
-    // Используем 416_667 → 5_000_004 → уже 0.18, поэтому 416_000 → 0.15
-    const params: MortgageParams = { ...defaultParams(), salary: 416_000 }
-    const result = calculate(params)
-    // annualIncome = 416_000 * 12 = 4_992_000 → 2.4M < 4.992M <= 5M → 0.15
-    expect(result.tax).not.toBeNull()
-    expect(result.tax!.ndflRate).toBeCloseTo(0.15, 5)
+  it('возврат за год не превышает уплаченного за год НДФЛ', () => {
+    const salary = 150_000
+    const result = calculate({ ...noSlip(), salary })
+    const ndflPerYear = salary * 12 * 0.13
+    for (const row of result.tax!.byYear) {
+      expect(row.amount).toBeLessThanOrEqual(ndflPerYear + 1)
+    }
   })
 
-  it('tax.deductionInterestTotal <= 3_000_000 * tax.ndflRate', () => {
-    const params: MortgageParams = { ...defaultParams(), salary: 150_000 }
-    const result = calculate(params)
-    expect(result.tax).not.toBeNull()
-    const maxInterestDeduction = 3_000_000 * result.tax!.ndflRate
-    expect(result.tax!.deductionInterestTotal).toBeLessThanOrEqual(
-      maxInterestDeduction + 1
+  it('вычет по процентам ограничен базой 3 млн', () => {
+    const result = calculate({ ...noSlip(), salary: 500_000 })
+    // При доходе 6М/год маргинальные ставки 13–18%; возврат с базы 3М не может
+    // превысить 3М × 0.18
+    expect(result.tax!.interestReturnTotal).toBeLessThanOrEqual(3_000_000 * 0.18 + 1)
+  })
+
+  it('порядок вычетов: сначала имущественный, затем процентный из остатка базы', () => {
+    // Доход 2.4М/год: имущественная база 2М съедает почти весь доход первого года,
+    // процентному остаётся только 0.4М базы, а не полная зарплата.
+    const result = calculate({ ...noSlip(), salary: 200_000 })
+    const y1 = result.tax!.byYear[0]
+    expect(y1.propertyReturn).toBeCloseTo(2_000_000 * 0.13, -2)
+    // процентная часть за первый год ≤ 0.4М × 13%
+    expect(y1.amount - y1.propertyReturn).toBeLessThanOrEqual(400_000 * 0.13 + 1)
+  })
+
+  it('вычеты симметричны: стратегия «гасить» тоже получает возвраты', () => {
+    const result = calculate({ ...noSlip(), salary: 300_000 })
+    expect(result.summary.prepay.taxReturnTotal).toBeGreaterThan(0)
+    // у копящего проценты по кредиту выше → процентный вычет не меньше
+    expect(result.summary.save.taxReturnTotal).toBeGreaterThanOrEqual(
+      result.summary.prepay.taxReturnTotal - 1,
     )
   })
 
-  it('tax.byYear[0] содержит deductionBuy', () => {
-    const params: MortgageParams = { ...defaultParams(), salary: 150_000 }
-    const result = calculate(params)
-    expect(result.tax).not.toBeNull()
-    expect(result.tax!.byYear).toBeDefined()
-    expect(result.tax!.byYear.length).toBeGreaterThan(0)
-    // Первый год должен содержать имущественный вычет (или его часть)
-    expect(result.tax!.byYear[0].propertyReturn).toBeGreaterThan(0)
+  it('вычеты улучшают итог обеих стратегий', () => {
+    const with_ = calculate({ ...noSlip(), salary: 300_000 })
+    const without = calculate({ ...noSlip(), salary: null })
+    expect(with_.summary.save.netWorth).toBeGreaterThan(without.summary.save.netWorth)
+    expect(with_.summary.prepay.netWorth).toBeGreaterThan(without.summary.prepay.netWorth)
   })
 })
 
 // ─── 6. Граничные случаи ──────────────────────────────────────────────────
 describe('граничные случаи', () => {
-  it('downPayment >= apartmentPrice: loanAmount=0, minPayment=0, не падает', () => {
-    const params: MortgageParams = {
-      ...defaultParams(),
-      downPayment: 7_000_000,
-    }
+  it('downPayment >= apartmentPrice: loanAmount=0, не падает', () => {
+    const params: MortgageParams = { ...defaultParams(), downPayment: 7_000_000 }
     expect(() => calculate(params)).not.toThrow()
     const result = calculate(params)
     expect(result.loanAmount).toBe(0)
     expect(result.minPayment).toBe(0)
+    expect(result.payoffMonth).toBeNull()
+    // весь бюджет инвестируется в обеих стратегиях
+    expect(result.summary.prepay.netWorth).toBe(result.summary.save.netWorth)
   })
 
-  it('freeMonthly < minPayment: нет отрицательных накоплений', () => {
-    const base = calculate(defaultParams())
-    const pmt = base.minPayment
-    const params: MortgageParams = {
-      ...defaultParams(),
-      freeMonthly: Math.round(pmt * 0.5), // намеренно ниже PMT
-    }
+  it('freeMonthly < minPayment: обязательный платёж всё равно вносится, накоплений нет', () => {
+    const base = calculate(noSlip())
+    const params: MortgageParams = { ...noSlip(), freeMonthly: Math.round(base.minPayment * 0.5) }
     const result = calculate(params)
     for (const point of result.series) {
-      expect(point.savingsB).toBeGreaterThanOrEqual(0)
-      expect(point.savingsA ?? 0).toBeGreaterThanOrEqual(0)
+      expect(point.savingsSave).toBe(0)
+      expect(point.debtSave).toBeGreaterThanOrEqual(0)
+    }
+    // долг гасится по графику несмотря на нехватку бюджета
+    expect(result.series[120].debtSave).toBeLessThan(result.loanAmount)
+  })
+
+  it('неотрицательность: долги и накопления >= 0 во всех сценариях', () => {
+    for (const params of [defaultParams(), noSlip(), { ...defaultParams(), depositRate: 25 }]) {
+      const result = calculate(params)
+      for (const point of result.series) {
+        expect(point.debtPrepay).toBeGreaterThanOrEqual(0)
+        expect(point.debtSave).toBeGreaterThanOrEqual(0)
+        expect(point.savingsPrepay).toBeGreaterThanOrEqual(0)
+        expect(point.savingsSave).toBeGreaterThanOrEqual(0)
+      }
     }
   })
 
-  it('series[t].debtA >= 0 для всех t', () => {
-    const result = calculate(defaultParams())
-    for (const point of result.series) {
-      expect(point.debtA).toBeGreaterThanOrEqual(0)
-    }
-  })
-
-  it('series[t].savingsB >= 0 для всех t', () => {
-    const result = calculate(defaultParams())
-    for (const point of result.series) {
-      expect(point.savingsB).toBeGreaterThanOrEqual(0)
-    }
-  })
-
-  it('slipMonth > horizonMonths: обрабатывается без ошибки', () => {
-    const params: MortgageParams = {
-      ...defaultParams(),
-      slipMonth: 999, // намеренно больше горизонта (10*12=120)
-    }
-    expect(() => calculate(params)).not.toThrow()
+  it('horizonYears === termYears: долг копящего к концу срока погашен', () => {
+    const params: MortgageParams = { ...noSlip(), horizonYears: 20 }
     const result = calculate(params)
-    // slipScenario должен вернуть корректный объект (платежи = 0 или разумные значения)
-    expect(result.slipScenario).toBeDefined()
-    expect(result.slipScenario.paymentWithPrepay).toBeGreaterThanOrEqual(0)
-    expect(result.slipScenario.paymentWithoutPrepay).toBeGreaterThanOrEqual(0)
+    const last = result.series[result.series.length - 1]
+    expect(last.debtSave).toBeLessThan(1_000)
+    expect(last.debtPrepay).toBe(0)
   })
 })
 
-// ─── 7. Числовые инварианты алгоритмов ───────────────────────────────────
-describe('числовые инварианты алгоритмов', () => {
-  it('ALGORITHMS.md §9.2: PMT ≈ 39 404 ₽ для тестовых данных', () => {
-    const result = calculate(defaultParams())
-    expect(result.minPayment).toBeGreaterThan(39_000)
-    expect(result.minPayment).toBeLessThan(39_900)
+// ─── 7. Числовые инварианты (ALGORITHMS.md §9, базовый сценарий) ──────────
+describe('числовые инварианты', () => {
+  it('§9.3: долг копящего на 36-м месяце ≈ 5 031 775 ₽ (±2%)', () => {
+    const result = calculate(noSlip())
+    expect(result.series[36].debtSave).toBeGreaterThan(4_900_000)
+    expect(result.series[36].debtSave).toBeLessThan(5_150_000)
   })
 
-  it('ALGORITHMS.md §9.6: marketRate = 17% для keyRate=16, bankDiscount=0.5', () => {
-    const result = calculate(defaultParams())
-    expect(result.marketRateAtSlip).toBeCloseTo(17, 5)
+  it('§9.4: накопления копящего на 36-м месяце ≈ 2 775 100 ₽ (±5%)', () => {
+    const result = calculate(noSlip())
+    expect(result.series[36].savingsSave).toBeGreaterThan(2_500_000)
+    expect(result.series[36].savingsSave).toBeLessThan(3_100_000)
   })
 
-  it('ALGORITHMS.md §9.3: D_B(36) ≈ 5 031 775 ₽ (±2%)', () => {
-    const result = calculate(defaultParams())
-    const dB36 = result.series[36].debtB
-    expect(dB36).toBeGreaterThan(4_900_000)
-    expect(dB36).toBeLessThan(5_150_000)
+  it('§9.5: долг гасящего на 36-м месяце ≈ 2 648 000 ₽', () => {
+    const result = calculate(noSlip())
+    expect(result.series[36].debtPrepay).toBeGreaterThan(2_000_000)
+    expect(result.series[36].debtPrepay).toBeLessThan(2_700_000)
   })
 
-  it('ALGORITHMS.md §9.4: S_B(36) ≈ 2 775 100 ₽ (±5%, без налоговых вычетов)', () => {
-    const params: MortgageParams = { ...defaultParams(), salary: null }
-    const result = calculate(params)
-    const sB36 = result.series[36].savingsB
-    expect(sB36).toBeGreaterThan(2_500_000)
-    expect(sB36).toBeLessThan(3_100_000)
+  it('инвестиционный доход копящего положителен и разумен', () => {
+    const result = calculate(noSlip())
+    const income = result.summary.save.investmentIncome
+    expect(income).toBeGreaterThan(0)
+    // грубая верхняя граница: весь бюджет 10 лет под 16%
+    expect(income).toBeLessThan(100_000 * 120 * 2)
   })
 
-  it('ALGORITHMS.md §9.5: D_A(36) ≈ 2 200 000–2 700 000 ₽', () => {
-    // С freeMonthly=100 000 и PMT≈39 404, досрочка ≈60 596/мес.
-    // Фактическое значение D_A(36) ≈ 2 648 132 ₽.
-    const result = calculate(defaultParams())
-    const dA36 = result.series[36].debtA
-    expect(dA36).toBeGreaterThan(2_000_000)
-    expect(dA36).toBeLessThan(2_700_000)
-  })
-
-  it('ALGORITHMS.md §9.7: PMT_slip_noprepay ≈ 75 551 ₽ (±5%)', () => {
-    const result = calculate(defaultParams())
-    const pmt = result.slipScenario.paymentWithoutPrepay
-    expect(pmt).toBeGreaterThan(71_000)
-    expect(pmt).toBeLessThan(80_000)
-  })
-
-  it('ALGORITHMS.md §9.8: PMT_slip_prepay ≈ 33 890 ₽ (±5%, без налоговых вычетов)', () => {
-    const params: MortgageParams = { ...defaultParams(), salary: null }
-    const result = calculate(params)
-    const pmt = result.slipScenario.paymentWithPrepay
-    expect(pmt).toBeGreaterThan(30_000)
-    expect(pmt).toBeLessThan(37_000)
-  })
-
-  it('ALGORITHMS.md §9.9: PMT_slip_prepay < PMT → точка безопасности достигнута до 36 месяца', () => {
-    const params: MortgageParams = { ...defaultParams(), salary: null }
-    const result = calculate(params)
-    // Если paymentWithPrepay при t=36 < minPayment, safetyPoint <= 36
-    if (result.slipScenario.paymentWithPrepay < result.minPayment) {
-      expect(result.safetyPoint).not.toBeNull()
-      expect(result.safetyPoint!).toBeLessThanOrEqual(36)
-    }
-  })
-
-  it('series[0].debtA === series[0].debtB === loanAmount (начальное состояние)', () => {
-    const result = calculate(defaultParams())
-    expect(result.series[0].debtA).toBeCloseTo(result.loanAmount, -1)
-    expect(result.series[0].debtB).toBeCloseTo(result.loanAmount, -1)
-  })
-
-  it('series[0].savingsB === 0 (начальных накоплений нет)', () => {
-    const result = calculate(defaultParams())
-    expect(result.series[0].savingsB).toBe(0)
+  it('calcPMT: 5 500 000 под 6% на 240 мес ≈ 39 404', () => {
+    expect(calcPMT(5_500_000, 0.005, 240)).toBeCloseTo(39_404, -1)
   })
 })
