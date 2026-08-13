@@ -23,7 +23,7 @@ export const SlipSection = memo(function SlipSection() {
   const setParam = useCalculatorStore((s) => s.setParam)
   const slipEnabled = useCalculatorStore((s) => s.slipEnabled)
   const setSlipEnabled = useCalculatorStore((s) => s.setSlipEnabled)
-  const linkedMortgage = useCalculatorStore((s) => s.linkedMortgage)
+  const mortgageFact = useCalculatorStore((s) => s.mortgageFact)
 
   const maxSlipMonth = params.termYears * 12
   const horizonMonths = params.horizonYears * 12
@@ -31,18 +31,20 @@ export const SlipSection = memo(function SlipSection() {
 
   // Двухуровневая подпись (§1.4 дизайна таймлайна): слайдер остаётся в единицах движка
   // («от сегодня»), но в режиме ипотеки подписываем ещё и абсолютный месяц ипотеки + календарь.
-  const hasHistory = !!linkedMortgage?.history && linkedMortgage.history.length > 0
-  const todayMonth = hasHistory ? linkedMortgage!.history!.length - 1 : 0
+  // Источник «сегодня» — факт-фаза трекера (§2.6 спеки continuous-simulation-design), а не
+  // компактная история из LinkedMortgage — той больше нет в контракте.
+  const hasFact = mortgageFact !== null
+  const todayMonth = hasFact ? mortgageFact.elapsedMonths : 0
   const absoluteSlipMonth = todayMonth + params.slipMonth
   const slipCalendarLabel =
-    hasHistory && linkedMortgage?.startedOn
-      ? formatMonthKeyAsMMYYYY(monthKeyFromDate(linkedMortgage.startedOn) + absoluteSlipMonth)
+    hasFact && mortgageFact
+      ? formatMonthKeyAsMMYYYY(monthKeyFromDate(mortgageFact.startedOn) + absoluteSlipMonth)
       : null
 
   const slipSecondaryLabel =
     params.slipMonth === 0
       ? 'Слёт не моделируется — базовый сценарий'
-      : hasHistory
+      : hasFact
         ? `Через ${formatMonths(params.slipMonth)} от сегодня · ${absoluteSlipMonth}-й месяц ипотеки` +
           (slipCalendarLabel ? ` · примерно ${slipCalendarLabel}` : '')
         : `Через ${formatMonths(params.slipMonth)} после начала ипотеки`

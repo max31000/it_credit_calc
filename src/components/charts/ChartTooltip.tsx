@@ -1,5 +1,6 @@
 import { Paper, Text } from '@mantine/core'
 import { formatRub, formatMonths, formatMonthsAgo } from '../../lib/formatters'
+import { yearTickFormatter } from './chartUtils'
 
 interface TooltipPayloadItem {
   name: string
@@ -32,6 +33,14 @@ export interface ChartTooltipProps {
   todayMonth?: number
   /** 'YYYY-MM-DD' дата выдачи ипотеки; null/undefined — календарную подпись не показываем */
   startedOn?: string | null
+  /**
+   * 'year' — ось X это года, а не месяцы от выдачи (вкладка «Движение денег», §7.3 спеки
+   * continuous-simulation). По умолчанию 'month' — прежнее поведение.
+   */
+  mode?: 'month' | 'year'
+  /** Форматирование значений payload; по умолчанию `formatRub`. На вкладке «Движение денег»
+   *  значения — суммы за год, а не остатки, но по умолчанию формат тот же (₽). */
+  valueFormatter?: (v: number) => string
 }
 
 export function ChartTooltip({
@@ -42,21 +51,27 @@ export function ChartTooltip({
   footer,
   todayMonth,
   startedOn,
+  mode = 'month',
+  valueFormatter = formatRub,
 }: ChartTooltipProps) {
   if (!active || !payload || payload.length === 0 || label === undefined) return null
-  const month = typeof label === 'string' ? parseFloat(label) : label
+  const x = typeof label === 'string' ? parseFloat(label) : label
 
-  // Режим ипотеки: заголовок показывает и абсолютный месяц ипотеки, и календарную дату,
-  // и позицию относительно «сегодня» (§5.4 дизайна docs/specs/2026-08-13-mortgage-timeline-design.md).
-  const showTimeline = todayMonth !== undefined
   let headerLine: string
-  if (showTimeline) {
-    const diff = month - todayMonth
-    const relative = diff === 0 ? 'сейчас' : diff > 0 ? `через ${formatMonths(diff)} от сегодня` : formatMonthsAgo(-diff)
-    const calendarPart = startedOn ? ` · ${formatMonthKeyAsMMYYYY(monthKeyFromDate(startedOn) + month)}` : ''
-    headerLine = `${labelPrefix ?? 'Месяц'} ${month} ипотеки${calendarPart} · ${relative}`
+  if (mode === 'year') {
+    headerLine = `${labelPrefix ?? 'Год'} ${yearTickFormatter(x)}`
   } else {
-    headerLine = `${labelPrefix ?? 'Месяц'} ${month} (${formatMonths(month)})`
+    // Режим ипотеки: заголовок показывает и абсолютный месяц ипотеки, и календарную дату,
+    // и позицию относительно «сегодня» (§5.4 дизайна docs/specs/2026-08-13-mortgage-timeline-design.md).
+    const showTimeline = todayMonth !== undefined
+    if (showTimeline) {
+      const diff = x - todayMonth
+      const relative = diff === 0 ? 'сейчас' : diff > 0 ? `через ${formatMonths(diff)} от сегодня` : formatMonthsAgo(-diff)
+      const calendarPart = startedOn ? ` · ${formatMonthKeyAsMMYYYY(monthKeyFromDate(startedOn) + x)}` : ''
+      headerLine = `${labelPrefix ?? 'Месяц'} ${x} ипотеки${calendarPart} · ${relative}`
+    } else {
+      headerLine = `${labelPrefix ?? 'Месяц'} ${x} (${formatMonths(x)})`
+    }
   }
 
   return (
@@ -68,7 +83,7 @@ export function ChartTooltip({
         .filter((item) => item.value !== null && item.value !== undefined)
         .map((item) => (
           <Text key={item.name} size="xs" style={{ color: item.color }}>
-            {item.name}: {formatRub(item.value as number)}
+            {item.name}: {valueFormatter(item.value as number)}
           </Text>
         ))}
       {footer && (

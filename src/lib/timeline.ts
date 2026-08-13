@@ -1,13 +1,16 @@
 /**
- * Presentation-слой «история + прогноз» для графиков (§2.3, §5.1 дизайна
- * docs/specs/2026-08-13-mortgage-timeline-design.md). Чистый модуль: без React,
- * без `new Date()`, не зависит от `tracker.ts` (обратной стрелки engine → tracker нет и не будет).
+ * Presentation-слой «факт + прогноз» для графиков (§2.3 спеки
+ * docs/specs/2026-08-14-continuous-simulation-design.md). Чистый модуль: без React,
+ * без `new Date()`. Использует только типы `tracker.ts` (обратной стрелки engine → tracker нет
+ * и не будет).
  *
  * Движок (`engine.ts`) не знает про даты и время до «сегодня» — его `series[0]` всегда
- * «начало прогноза». Этот модуль склеивает прошлое (компактный ряд остатков из трекера)
- * и будущее (`series`) в единую ось «месяц от выдачи ипотеки».
+ * «начало прогноза». Этот модуль склеивает прошлое (`MortgageFact.history`) и будущее
+ * (`series`) в единую ось «месяц от выдачи ипотеки».
  */
 import type { CalculationResult } from './engine'
+import type { MortgageFact } from './tracker'
+import type { MortgageEventKind } from '../api/types'
 
 /** Одна точка склеенного ряда: абсолютный месяц от выдачи ипотеки */
 export interface TimelinePoint {
@@ -15,7 +18,7 @@ export interface TimelinePoint {
   month: number
   /** Факт по трекеру; null для месяцев после «сегодня» */
   debtFact: number | null
-  /** −debtFact — нижняя граница капитала в прошлом (§1.2 дизайна); null после «сегодня» */
+  /** −debtFact — нижняя граница капитала в прошлом; null после «сегодня» */
   netWorthFact: number | null
   /** Прогноз; null для месяцев до «сегодня» */
   debtPrepay: number | null
@@ -32,15 +35,26 @@ export interface SlipTimelinePoint {
   paymentWithoutPrepay: number
 }
 
+/** Маркер события факт-фазы для ReferenceDot/ReferenceLine — только prepayment и rate */
+export interface TimelineMarker {
+  month: number
+  kind: MortgageEventKind
+  amount: number | null
+  rate: number | null
+  yearMonth: string
+}
+
 export interface Timeline {
-  /** false — гостевой сценарий: история отсутствует, ось совпадает с series */
-  hasHistory: boolean
-  /** Абсолютный месяц «сегодня» = длина истории − 1 (0 без истории) */
+  /** false — гостевой сценарий: факта нет, ось совпадает с series */
+  hasFact: boolean
+  /** Абсолютный месяц «сегодня» = fact.elapsedMonths (0 без факта) */
   todayMonth: number
   points: TimelinePoint[]
   slipPoints: SlipTimelinePoint[]
-  /** 'YYYY-MM-DD' даты выдачи; null без истории */
+  /** 'YYYY-MM-DD' даты выдачи; null без факта */
   startedOn: string | null
+  /** Маркеры событий прошлого — только prepayment и rate (снимки и смены платежа не рисуем) */
+  markers: TimelineMarker[]
 }
 
 /** Индекс календарного месяца: year*12 + (month-1) — та же арифметика, что в tracker.ts */
@@ -56,21 +70,20 @@ function formatMonthKey(key: number): string {
 }
 
 /**
- * Склеивает историю долга (факт по трекеру) и прогноз (`result.series`) в единый ряд
- * на оси «месяц от выдачи ипотеки». Правила склейки — §2.3 дизайна:
+ * Склеивает факт-фазу (`MortgageFact.history`) и прогноз (`result.series`) в единый ряд
+ * на оси «месяц от выдачи ипотеки». Правила склейки не меняются относительно фазы 5:
  * - длина `points` = `todayMonth + horizonMonths + 1`;
  * - `month < todayMonth`: заполнены только `debtFact`/`netWorthFact`;
  * - `month > todayMonth`: заполнены только прогнозные ключи;
  * - `month === todayMonth`: заполнены все ключи (точка стыка, линии сходятся).
  *
- * `history` — компактный ряд остатков по месяцам от выдачи (см. `LinkedMortgage.history`).
- * `history === null` — гостевой сценарий: `todayMonth = 0`, точка стыка (month 0) всё равно
+ * `fact === null` — гостевой сценарий: `todayMonth = 0`, точка стыка (month 0) всё равно
  * заполняется фактом — он равен `series[0].debtSave` (стратегия «копить» не дампит долг
  * в месяц 0, поэтому это тот же «текущий долг», что и в любом другом случае).
  */
-export function buildTimeline(result: CalculationResult, history: number[] | null, startedOn: string | null): Timeline {
-  const hasHistory = history !== null && history.length > 0
-  const todayMonth = hasHistory ? history.length - 1 : 0
+export function buildTimeline(result: CalculationResult, fact: MortgageFact | null): Timeline {
+  const hasFact = fact !== null
+  const todayMonth = hasFact ? fact.elapsedMonths : 0
   const horizonMonths = result.series.length - 1
   const totalMonths = todayMonth + horizonMonths + 1
 
@@ -78,10 +91,10 @@ export function buildTimeline(result: CalculationResult, history: number[] | nul
 
   for (let month = 0; month < totalMonths; month++) {
     let debtFact: number | null = null
-    if (hasHistory && month <= todayMonth) {
-      debtFact = history[month]
+    if (hasFact && month <= todayMonth) {
+      debtFact = fact.history.points[month].debt
     } else if (month === todayMonth) {
-      // Гостевой сценарий: точка стыка (month 0) заполняется фактом даже без истории —
+      // Гостевой сценарий: точка стыка (month 0) заполняется фактом даже без факт-фазы —
       // «сейчас» и есть момент выдачи, факт и начало прогноза — одно и то же число.
       debtFact = result.series[0].debtSave
     }
@@ -110,12 +123,19 @@ export function buildTimeline(result: CalculationResult, history: number[] | nul
     paymentWithoutPrepay: p.paymentWithoutPrepay,
   }))
 
+  const markers: TimelineMarker[] = hasFact
+    ? fact.events
+        .filter((e) => e.kind === 'prepayment' || e.kind === 'rate')
+        .map((e) => ({ month: e.month, kind: e.kind, amount: e.amount, rate: e.rate, yearMonth: e.yearMonth }))
+    : []
+
   return {
-    hasHistory,
+    hasFact,
     todayMonth,
     points,
     slipPoints,
-    startedOn: hasHistory ? startedOn : null,
+    startedOn: hasFact ? fact.startedOn : null,
+    markers,
   }
 }
 
@@ -124,14 +144,14 @@ export function toAbsolute(t: Timeline, monthFromToday: number): number {
   return t.todayMonth + monthFromToday
 }
 
-/** Точки от «сегодня» и дальше — для режима графика «От сегодня» (§1.7 дизайна) */
+/** Точки от «сегодня» и дальше — для режима графика «От сегодня» */
 export function sliceFromToday(t: Timeline): TimelinePoint[] {
   return t.points.slice(t.todayMonth)
 }
 
-/** 'YYYY-MM' для абсолютного месяца оси; null без истории (нет даты выдачи, от которой считать) */
+/** 'YYYY-MM' для абсолютного месяца оси; null без факта (нет даты выдачи, от которой считать) */
 export function absoluteMonthLabel(t: Timeline, month: number): string | null {
-  if (!t.hasHistory || t.startedOn === null) return null
+  if (!t.hasFact || t.startedOn === null) return null
   const startKey = monthKeyFromDate(t.startedOn)
   return formatMonthKey(startKey + month)
 }

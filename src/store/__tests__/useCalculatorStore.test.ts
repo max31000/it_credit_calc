@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { useCalculatorStore, linkFromMortgage, type LinkedMortgage } from '../useCalculatorStore'
-import type { MortgageParams } from '../../lib/engine'
+import { calculate, type MortgageParams } from '../../lib/engine'
+import { buildMortgageFact, computeMortgageState, type MortgageFact } from '../../lib/tracker'
 import type { MortgageModeParams } from '../../lib/mortgageToParams'
 import type { MortgageDto } from '../../api/types'
 
@@ -16,9 +17,35 @@ beforeEach(() => {
     ownParams: { ...initialParams },
     slipEnabled: false,
     linkedMortgage: null,
+    mortgageFact: null,
+    factError: null,
   })
   useCalculatorStore.getState().setParam('slipMonth', 36)
 })
+
+/** Общая ипотека-фикстура для тестов режима: реальный `buildMortgageFact` вместо
+ *  вручную собранного объекта — форма `MortgageFact` заморожена спекой (§2.2), и
+ *  дублировать её руками в тестах — источник расхождений при следующей правке контракта. */
+const mortgageDto: MortgageDto = {
+  id: 17,
+  title: 'Квартира на Ленина',
+  bank: null,
+  propertyPrice: 7_000_000,
+  downPayment: 1_500_000,
+  principal: 5_500_000,
+  rate: 6,
+  termMonths: 240,
+  startedOn: '2024-01-01',
+  monthlyPayment: null,
+  createdAt: '2024-01-01T00:00:00Z',
+  updatedAt: '2024-01-01T00:00:00Z',
+  usedPropertyBase: 0,
+  usedInterestBase: 0,
+}
+
+function makeFact(today = new Date('2026-08-13')): MortgageFact {
+  return buildMortgageFact(mortgageDto, [], today)
+}
 
 describe('useCalculatorStore — тумблер слёта', () => {
   it('slipEnabled выключен по умолчанию', () => {
@@ -61,13 +88,13 @@ const link = (over: Partial<LinkedMortgage> = {}): LinkedMortgage => ({
   ...over,
 })
 
-describe('useCalculatorStore — режим ипотеки (§3.1 спеки)', () => {
+describe('useCalculatorStore — режим ипотеки (§3.1 спеки, сигнатура расширена §2.6)', () => {
   it('вход в режим не меняет ownParams; выход возвращает их точь-в-точь', () => {
     const store = useCalculatorStore.getState()
     const ownBefore = store.ownParams
 
     const mortgageParams: MortgageParams = { ...ownBefore, apartmentPrice: 9_000_000, downPayment: 500_000 }
-    store.enterMortgageMode(link(), mortgageParams)
+    store.enterMortgageMode(link(), mortgageParams, makeFact())
 
     expect(useCalculatorStore.getState().ownParams).toEqual(ownBefore)
     expect(useCalculatorStore.getState().params.apartmentPrice).toBe(9_000_000)
@@ -79,13 +106,13 @@ describe('useCalculatorStore — режим ипотеки (§3.1 спеки)', 
 
   it('вход в режим ипотеки принудительно выключает slipEnabled', () => {
     useCalculatorStore.getState().setSlipEnabled(true)
-    useCalculatorStore.getState().enterMortgageMode(link(), useCalculatorStore.getState().ownParams)
+    useCalculatorStore.getState().enterMortgageMode(link(), useCalculatorStore.getState().ownParams, makeFact())
     expect(useCalculatorStore.getState().slipEnabled).toBe(false)
   })
 
   it('правка freeMonthly (ключ аккаунта) в режиме ипотеки уходит и в ownParams', () => {
     const store = useCalculatorStore.getState()
-    store.enterMortgageMode(link(), store.ownParams)
+    store.enterMortgageMode(link(), store.ownParams, makeFact())
 
     useCalculatorStore.getState().setParam('freeMonthly', 250_000)
 
@@ -97,7 +124,7 @@ describe('useCalculatorStore — режим ипотеки (§3.1 спеки)', 
   it('правка apartmentPrice (сценарный ключ) в режиме ипотеки не уходит в ownParams', () => {
     const store = useCalculatorStore.getState()
     const ownBefore = store.ownParams
-    store.enterMortgageMode(link(), store.ownParams)
+    store.enterMortgageMode(link(), store.ownParams, makeFact())
 
     useCalculatorStore.getState().setParam('apartmentPrice', 12_000_000)
 
@@ -109,7 +136,7 @@ describe('useCalculatorStore — режим ипотеки (§3.1 спеки)', 
   it('setParams — один батч-пересчёт, соблюдает то же правило записи в ownParams', () => {
     const store = useCalculatorStore.getState()
     const ownBefore = store.ownParams
-    store.enterMortgageMode(link(), store.ownParams)
+    store.enterMortgageMode(link(), store.ownParams, makeFact())
 
     useCalculatorStore.getState().setParams({ apartmentPrice: 8_000_000, downPayment: 1_000_000 })
 
@@ -144,7 +171,7 @@ describe('useCalculatorStore — режим ипотеки (§3.1 спеки)', 
 
   it('правка startingSavings (ключ аккаунта) в режиме ипотеки уходит и в ownParams', () => {
     const store = useCalculatorStore.getState()
-    store.enterMortgageMode(link(), store.ownParams)
+    store.enterMortgageMode(link(), store.ownParams, makeFact())
 
     useCalculatorStore.getState().setParam('startingSavings', 1_500_000)
 
@@ -156,7 +183,7 @@ describe('useCalculatorStore — режим ипотеки (§3.1 спеки)', 
   it('правка usedInterestBase (сценарный ключ) в режиме ипотеки не уходит в ownParams', () => {
     const store = useCalculatorStore.getState()
     const ownBefore = store.ownParams
-    store.enterMortgageMode(link(), store.ownParams)
+    store.enterMortgageMode(link(), store.ownParams, makeFact())
 
     useCalculatorStore.getState().setParam('usedInterestBase', 500_000)
 
@@ -166,54 +193,105 @@ describe('useCalculatorStore — режим ипотеки (§3.1 спеки)', 
   })
 })
 
-describe('useCalculatorStore — linkFromMortgage (§2.6 дизайна таймлайна)', () => {
-  it('history.at(-1) === round(state.currentBalance)', () => {
-    const mortgage: MortgageDto = {
-      id: 17,
-      title: 'Квартира на Ленина',
-      bank: null,
-      propertyPrice: 7_000_000,
-      downPayment: 1_500_000,
-      principal: 5_500_000,
-      rate: 6,
-      termMonths: 240,
-      startedOn: '2025-01-01',
-      monthlyPayment: null,
-      createdAt: '2025-01-01T00:00:00Z',
-      updatedAt: '2025-01-01T00:00:00Z',
-      usedPropertyBase: 0,
-      usedInterestBase: 0,
-    }
+describe('useCalculatorStore — факт-фаза не подменяет вводные (§1, §2.6 спеки continuous-simulation)', () => {
+  it('enterMortgageMode кладёт факт, и result.loanAmount === round(fact.engine.debt)', () => {
+    const store = useCalculatorStore.getState()
+    const fact = makeFact()
+    store.enterMortgageMode(link(), store.ownParams, fact)
+
+    const state = useCalculatorStore.getState()
+    expect(state.mortgageFact).toBe(fact)
+    expect(state.factError).toBeNull()
+    // loanAmount в режиме ипотеки — fact.debt без округления (§2.1 спеки: округляются
+    // только minPayment/totalInterest).
+    expect(state.result.loanAmount).toBe(fact.engine.debt)
+  })
+
+  it('exitMortgageMode обнуляет факт, и результат совпадает с гостевым для ownParams', () => {
+    const store = useCalculatorStore.getState()
+    store.enterMortgageMode(link(), store.ownParams, makeFact())
+
+    useCalculatorStore.getState().exitMortgageMode()
+
+    const state = useCalculatorStore.getState()
+    expect(state.mortgageFact).toBeNull()
+    expect(state.factError).toBeNull()
+    const guestResult = calculate({
+      ...state.ownParams,
+      slipMonth: state.slipEnabled ? state.ownParams.slipMonth : 0,
+    })
+    expect(state.result).toEqual(guestResult)
+  })
+
+  it('правка freeMonthly в режиме ипотеки пересчитывает результат с фактом (не теряет его)', () => {
+    const store = useCalculatorStore.getState()
+    const fact = makeFact()
+    store.enterMortgageMode(link(), store.ownParams, fact)
+
+    useCalculatorStore.getState().setParam('freeMonthly', 250_000)
+
+    const state = useCalculatorStore.getState()
+    expect(state.mortgageFact).toBe(fact)
+    expect(state.params.freeMonthly).toBe(250_000)
+    // Факт не потерян пересчётом — сумма кредита прогноза по-прежнему остаток факта,
+    // а не что-то, пересчитанное из downPayment/itRate/termYears.
+    expect(state.result.loanAmount).toBe(fact.engine.debt)
+  })
+
+  it('setFactError записывает и сбрасывает текст ошибки', () => {
+    useCalculatorStore.getState().setFactError('сеть недоступна')
+    expect(useCalculatorStore.getState().factError).toBe('сеть недоступна')
+    useCalculatorStore.getState().setFactError(null)
+    expect(useCalculatorStore.getState().factError).toBeNull()
+  })
+})
+
+describe('useCalculatorStore — onRehydrateStorage не персистит факт (§2.6 спеки)', () => {
+  it('mortgageFact и factError обнуляются в режиме ипотеки после рехайдрации', () => {
+    const store = useCalculatorStore.getState()
+    store.enterMortgageMode(link(), store.ownParams, makeFact())
+    expect(useCalculatorStore.getState().mortgageFact).not.toBeNull()
+
+    const onRehydrateFactory = (
+      useCalculatorStore as unknown as {
+        persist: {
+          getOptions: () => {
+            onRehydrateStorage?: () => (state: ReturnType<typeof useCalculatorStore.getState>) => void
+          }
+        }
+      }
+    ).persist.getOptions().onRehydrateStorage
+
+    const onRehydrate = onRehydrateFactory!()
+    const state = useCalculatorStore.getState()
+    onRehydrate(state)
+
+    expect(state.mortgageFact).toBeNull()
+    expect(state.factError).toBeNull()
+  })
+})
+
+describe('useCalculatorStore — linkFromMortgage (§2.6 спеки continuous-simulation)', () => {
+  it('переносит principal/paidInterest/elapsedMonths из MortgageFact, а не из компактной history', () => {
+    const today = new Date('2026-01-01')
+    const fact = buildMortgageFact(mortgageDto, [], today)
     const mapped: MortgageModeParams = {
       params: useCalculatorStore.getState().params,
-      state: {
-        currentBalance: 5_123_456.78,
-        currentRate: 6,
-        currentPayment: 41_000,
-        monthsLeft: 200,
-        payoffDate: '2042-01',
-        paidPrincipal: 376_543.22,
-        progressPct: 0.07,
-        asOf: '2026-01-01',
-      },
+      state: computeMortgageState(mortgageDto, [], today),
+      fact,
       termFallback: false,
-      history: {
-        points: [
-          { month: 0, yearMonth: '2025-01', debt: 5_500_000, interest: 0, rate: 6, payment: 41_000 },
-          { month: 1, yearMonth: '2025-02', debt: 5_123_456.78, interest: 27_500, payment: 41_000, rate: 6 },
-        ],
-        elapsedMonths: 1,
-        paidInterest: 27_500,
-        interestByYear: { 2025: 27_500 },
-      },
     }
 
-    const result = linkFromMortgage(mortgage, mapped)
-    expect(result.history?.at(-1)).toBe(Math.round(mapped.state.currentBalance))
-    expect(result.startedOn).toBe(mortgage.startedOn)
-    expect(result.paidInterest).toBe(mapped.history.paidInterest)
-    expect(result.termFallback).toBe(mapped.termFallback)
+    const result = linkFromMortgage(mortgageDto, mapped)
     expect(result.balance).toBe(mapped.state.currentBalance)
+    expect(result.payment).toBe(mapped.state.currentPayment)
+    expect(result.startedOn).toBe(mortgageDto.startedOn)
+    expect(result.paidInterest).toBe(fact.history.paidInterest)
+    expect(result.principal).toBe(fact.principal)
+    expect(result.elapsedMonths).toBe(fact.elapsedMonths)
+    expect(result.termFallback).toBe(mapped.termFallback)
+    // Больше нет компактной history в контракте (§2.6) — линк не должен её нести.
+    expect('history' in result).toBe(false)
   })
 })
 
@@ -266,7 +344,7 @@ describe('useCalculatorStore — миграция persist → v3', () => {
   })
 })
 
-describe('useCalculatorStore — миграция persist v3 → v4 (§2.6 дизайна таймлайна)', () => {
+describe('useCalculatorStore — миграция persist v3/v4 → v5 (§2.6 спеки continuous-simulation)', () => {
   it('дозаливает три новых поля нулями в params и ownParams', () => {
     // Персист версии 3 не содержит новых полей — типобезопасно этого не выразить,
     // поэтому строим объект без Omit-проверки, как реальный localStorage.
@@ -294,9 +372,23 @@ describe('useCalculatorStore — миграция persist v3 → v4 (§2.6 ди�
     expect(migrated.slipEnabled).toBe(true)
   })
 
-  it('сбрасывает linkedMortgage.history в undefined — старый персист его не содержит', () => {
-    const migrated = migrate({ linkedMortgage: { ...link(), history: [1, 2, 3] } }, 3)
-    expect(migrated.linkedMortgage?.history).toBeUndefined()
+  it('вычищает устаревшее поле linkedMortgage.history (v3/v4) — не роняет стор', () => {
+    // Старый персист (до фазы 6) нёс компактный ряд остатков в `history` — поля больше
+    // нет в контракте `LinkedMortgage` (§2.6 спеки); симулируем реальный localStorage
+    // приведением типа, раз само поле уже не выразить в LinkedMortgage.
+    const persistedLink = { ...link(), history: [5_500_000, 5_400_000, 5_300_000] } as unknown as LinkedMortgage
+    const migrated = migrate({ linkedMortgage: persistedLink }, 4)
+
     expect(migrated.linkedMortgage?.id).toBe(17)
+    expect(migrated.linkedMortgage?.balance).toBe(persistedLink.balance)
+    expect((migrated.linkedMortgage as unknown as Record<string, unknown> | null)?.history).toBeUndefined()
+    expect(migrated.linkedMortgage?.principal).toBeUndefined()
+    expect(migrated.linkedMortgage?.paidInterest).toBeUndefined()
+    expect(migrated.linkedMortgage?.elapsedMonths).toBeUndefined()
+  })
+
+  it('linkedMortgage === null в старом персисте остаётся null после миграции', () => {
+    const migrated = migrate({ linkedMortgage: null }, 4)
+    expect(migrated.linkedMortgage).toBeNull()
   })
 })

@@ -6,6 +6,7 @@ import { SliderInput } from '../controls/SliderInput'
 import { NumericInput } from '../controls/NumericInput'
 import { InfoTooltip } from '../controls/InfoTooltip'
 import { DeductionsBlock } from '../calculator/DeductionsBlock'
+import { MortgageFactsCard } from '../calculator/MortgageFactsCard'
 import { relinkLoan } from '../../lib/loanLink'
 import { formatRub, formatPct } from '../../lib/formatters'
 
@@ -14,6 +15,7 @@ export const ParamsSection = memo(function ParamsSection() {
   const result = useCalculatorStore((s) => s.result)
   const setParam = useCalculatorStore((s) => s.setParam)
   const setParams = useCalculatorStore((s) => s.setParams)
+  const fact = useCalculatorStore((s) => s.mortgageFact)
 
   const loanAmount = result.loanAmount
   const downPaymentPct = params.apartmentPrice > 0 ? (params.downPayment / params.apartmentPrice) * 100 : 0
@@ -73,7 +75,12 @@ export const ParamsSection = memo(function ParamsSection() {
       <Divider mb="md" mt="xs" />
 
       <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="xl">
-        {/* Левая колонка: квартира и кредит */}
+        {/* Левая колонка: квартира и кредит — в режиме ипотеки это факты по договору
+            (read-only карточка), а не слайдеры (§8.2 спеки continuous-simulation-design):
+            редактирование живёт в трекере, здесь их двигать нельзя. */}
+        {fact ? (
+          <MortgageFactsCard fact={fact} />
+        ) : (
         <Stack gap="lg">
           <SliderInput
             label="Стоимость квартиры"
@@ -178,6 +185,7 @@ export const ParamsSection = memo(function ParamsSection() {
             ]}
           />
         </Stack>
+        )}
 
         {/* Правая колонка: деньги */}
         <Stack gap="lg">
@@ -270,7 +278,11 @@ export const ParamsSection = memo(function ParamsSection() {
               min={3}
               max={30}
               step={1}
-              onChange={(v) => setParam('horizonYears', Math.min(v, params.termYears))}
+              // Кламп сроком — только у гостя: горизонт там ограничивает сам себя выбором
+              // срока кредита. В режиме ипотеки горизонт — это горизонт сравнения стратегий,
+              // а не срок кредита, кламп остатком уничтожал бы сравнение на коротких остатках
+              // (§7.4 спеки continuous-simulation-design).
+              onChange={(v) => setParam('horizonYears', fact ? v : Math.min(v, params.termYears))}
               format={(v) => `${v} лет`}
               suffix=" лет"
               marks={[
@@ -280,7 +292,7 @@ export const ParamsSection = memo(function ParamsSection() {
                 { value: 30, label: '30 лет' },
               ]}
             />
-            {params.horizonYears >= params.termYears && (
+            {!fact && params.horizonYears >= params.termYears && (
               <Text size="xs" c="dimmed">
                 Ограничено сроком ипотеки
               </Text>

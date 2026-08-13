@@ -29,3 +29,11 @@ export function formatYAxis(v: number): string {
 export function xTickFormatter(v: number): string {
   return v % 12 === 0 ? `${v / 12}г.` : ''
 }
+
+/**
+ * Подпись года на оси вкладки «Движение денег» (§7.3 спеки continuous-simulation).
+ * Календарный год (режим ипотеки) — как есть; порядковый год прогноза (гость) — «N-й год».
+ */
+export function yearTickFormatter(year: number): string {
+  return year > 1000 ? String(year) : `${year}-й год`
+}

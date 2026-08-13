@@ -23,7 +23,7 @@ export function MortgageCard({ mortgage, events }: MortgageCardProps) {
     if (mortgageClosed) return
     const settings = accountSettingsFromParams(useCalculatorStore.getState().ownParams)
     const mapped = mortgageToParams({ mortgage, events, settings, today: new Date() })
-    enterMortgageMode(linkFromMortgage(mortgage, mapped), mapped.params)
+    enterMortgageMode(linkFromMortgage(mortgage, mapped), mapped.params, mapped.fact)
     navigate('/')
   }
 

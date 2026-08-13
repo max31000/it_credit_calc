@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { computeMortgageState, buildDebtHistory } from '../tracker'
+import { computeMortgageState, buildDebtHistory, buildMortgageFact } from '../tracker'
 import { calcPMT } from '../engine'
 import type { MortgageDto, MortgageEventDto } from '../../api/types'
 
@@ -281,3 +281,134 @@ describe('buildDebtHistory', () => {
 function round2(v: number): number {
   return Math.round(v * 100) / 100
 }
+
+// ─── Инварианты §11 спеки docs/specs/2026-08-14-continuous-simulation-design.md ────────────
+// (§4 — разложение движения денег в факт-фазе)
+describe('И1: закон сохранения денег в факт-фазе', () => {
+  it('снимок + две досрочки + смена ставки: paidScheduled + paidPrepayments === paidInterest + (principal − debtLast) + snapshotDrift', () => {
+    const m = baseMortgage()
+    const events = [
+      ev({ kind: 'prepayment', occurredOn: '2025-03-01', amount: 200_000 }),
+      ev({ kind: 'balance', occurredOn: '2025-06-01', amount: 4_900_000 }),
+      ev({ kind: 'rate', occurredOn: '2025-08-01', rate: 7.5, amount: null }),
+      ev({ kind: 'prepayment', occurredOn: '2025-10-01', amount: 150_000 }),
+    ]
+    const today = new Date('2026-06-01') // 17 месяцев с startedOn
+
+    const h = buildDebtHistory(m, events, today)
+    const debtLast = h.points[h.points.length - 1].debt
+
+    expect(h.hasSnapshots).toBe(true)
+    const lhs = h.paidScheduled + h.paidPrepayments
+    const rhs = h.paidInterest + (m.principal - debtLast) + h.snapshotDrift
+    expect(Math.abs(lhs - rhs)).toBeLessThanOrEqual(0.02)
+  })
+
+  it('без balance-событий: snapshotDrift === 0, hasSnapshots === false, закон держится без поправки', () => {
+    const m = baseMortgage()
+    const events = [
+      ev({ kind: 'prepayment', occurredOn: '2025-04-01', amount: 250_000 }),
+      ev({ kind: 'rate', occurredOn: '2025-09-01', rate: 7, amount: null }),
+    ]
+    const today = new Date('2026-01-01')
+
+    const h = buildDebtHistory(m, events, today)
+    const debtLast = h.points[h.points.length - 1].debt
+
+    expect(h.hasSnapshots).toBe(false)
+    expect(h.snapshotDrift).toBe(0)
+    const lhs = h.paidScheduled + h.paidPrepayments
+    const rhs = h.paidInterest + (m.principal - debtLast)
+    expect(Math.abs(lhs - rhs)).toBeLessThanOrEqual(0.02)
+  })
+
+  it('scheduledPaid в месяце закрытия долга равен debt+interest, не полному платежу', () => {
+    // Досрочка в конце первого месяца оставляет ровно 5000 ₽ остатка (после обязательного
+    // платежа месяца 1) — в месяце 2 обязательный платёж (~39 400 ₽) намного больше остатка
+    // + процентов, значит вносится не он целиком, а ровно остаток закрытия.
+    const m = baseMortgage()
+    const pmt = calcPMT(m.principal, m.rate / 1200, m.termMonths)
+    const interestMonth1 = m.principal * (m.rate / 1200)
+    const balanceAfterSchedMonth1 = m.principal + interestMonth1 - Math.min(pmt, m.principal + interestMonth1)
+    const leftover = 5_000
+    const prepayAmount = balanceAfterSchedMonth1 - leftover
+
+    const events = [ev({ kind: 'prepayment', occurredOn: '2025-02-01', amount: prepayAmount })]
+    const today = new Date('2025-06-01') // 5 месяцев с startedOn
+
+    const h = buildDebtHistory(m, events, today)
+
+    // Находим месяц, где долг обнуляется САМИМ обязательным платежом (а не событием)
+    const closingPoint = h.points.find((p, i) => i > 0 && p.debt === 0 && h.points[i - 1].debt > 0)
+    expect(closingPoint).toBeDefined()
+    expect(closingPoint!.prepayment).toBe(0) // закрытие не событием, а платежом
+    expect(closingPoint!.scheduledPaid).toBeLessThan(pmt)
+    expect(closingPoint!.scheduledPaid).toBeCloseTo(closingPoint!.principalPaid + closingPoint!.interest, 1)
+  })
+
+  it('платёж меньше процентов: principalPaid < 0, долг растёт, закон сохранения держится', () => {
+    const m = { ...baseMortgage(), rate: 20 }
+    const events = [ev({ kind: 'payment', occurredOn: '2025-01-01', amount: 100, rate: null })]
+    const today = new Date('2026-01-01')
+
+    const h = buildDebtHistory(m, events, today)
+    expect(h.points[1].principalPaid).toBeLessThan(0)
+    expect(h.points[h.points.length - 1].debt).toBeGreaterThan(m.principal)
+
+    const debtLast = h.points[h.points.length - 1].debt
+    const lhs = h.paidScheduled + h.paidPrepayments
+    const rhs = h.paidInterest + (m.principal - debtLast) + h.snapshotDrift
+    expect(Math.abs(lhs - rhs)).toBeLessThanOrEqual(0.02)
+  })
+})
+
+describe('buildMortgageFact', () => {
+  it('engine.debt === computeMortgageState(...).currentBalance', () => {
+    const m = baseMortgage()
+    const events = [
+      ev({ kind: 'balance', occurredOn: '2025-03-01', amount: 5_200_000 }),
+      ev({ kind: 'prepayment', occurredOn: '2025-05-01', amount: 300_000 }),
+    ]
+    const today = new Date('2025-11-01')
+
+    const fact = buildMortgageFact(m, events, today)
+    const state = computeMortgageState(m, events, today)
+    expect(fact.engine.debt).toBe(state.currentBalance)
+  })
+
+  it('engine.remainingMonths === termMonths − elapsedMonths для незакрытой ипотеки в срок', () => {
+    const m = baseMortgage() // termMonths: 240
+    const today = new Date('2026-01-01') // 12 месяцев с startedOn
+
+    const fact = buildMortgageFact(m, [], today)
+    expect(fact.termExpired).toBe(false)
+    expect(fact.engine.remainingMonths).toBe(m.termMonths - fact.elapsedMonths)
+  })
+
+  it('taxSettleOffset: today=2026-08-13 → 4, 2026-12-31 → 0, 2026-01-05 → 11', () => {
+    const m = baseMortgage()
+    expect(buildMortgageFact(m, [], new Date('2026-08-13')).engine.taxSettleOffset).toBe(4)
+    expect(buildMortgageFact(m, [], new Date('2026-12-31')).engine.taxSettleOffset).toBe(0)
+    expect(buildMortgageFact(m, [], new Date('2026-01-05')).engine.taxSettleOffset).toBe(11)
+  })
+
+  it('events содержит только события с occurredOn <= today, в порядке (occurredOn, id)', () => {
+    const m = baseMortgage()
+    const today = new Date('2025-09-01')
+    const events = [
+      ev({ kind: 'rate', occurredOn: '2025-08-01', rate: 7, amount: null }), // до today
+      ev({ kind: 'prepayment', occurredOn: '2025-12-01', amount: 100_000 }), // после today
+      ev({ kind: 'prepayment', occurredOn: '2025-03-01', amount: 50_000 }), // до today, раньше по дате
+    ]
+
+    const fact = buildMortgageFact(m, events, today)
+    expect(fact.events.length).toBe(2)
+    // Порядок: сначала 2025-03 (prepayment), затем 2025-08 (rate)
+    expect(fact.events[0].kind).toBe('prepayment')
+    expect(fact.events[0].yearMonth).toBe('2025-03')
+    expect(fact.events[1].kind).toBe('rate')
+    expect(fact.events[1].yearMonth).toBe('2025-08')
+    // Событие после today не попало
+    expect(fact.events.every((e) => e.yearMonth <= '2025-09')).toBe(true)
+  })
+})

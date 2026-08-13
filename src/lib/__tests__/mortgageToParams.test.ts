@@ -1,6 +1,14 @@
+/**
+ * mortgageToParams — переписан целиком (§12.3 спеки
+ * docs/specs/2026-08-14-continuous-simulation-design.md): старые кейсы кодировали отвергнутую
+ * модель (`apartmentPrice − downPayment === round(currentBalance)`, срок из проекции погашения
+ * вместо остатка по договору). Новая модель: `downPayment` — реальный взнос по договору,
+ * движок получает сумму кредита/ставку/платёж/срок из `fact.engine` напрямую, `termYears` —
+ * только граница слайдера слёта.
+ */
 import { describe, it, expect } from 'vitest'
 import { mortgageToParams, accountSettingsFromParams } from '../mortgageToParams'
-import { computeMortgageState } from '../tracker'
+import { computeMortgageState, buildMortgageFact } from '../tracker'
 import type { AccountSettings, MortgageDto, MortgageEventDto } from '../../api/types'
 
 const baseMortgage = (over: Partial<MortgageDto> = {}): MortgageDto => ({
@@ -45,80 +53,87 @@ const settings: AccountSettings = {
 }
 
 describe('mortgageToParams', () => {
-  it('ипотека без событий: маппит цену, ставку, срок из планового прогноза', () => {
+  it('downPayment === mortgage.downPayment (реальный взнос, не синтетический)', () => {
     const mortgage = baseMortgage()
     const today = new Date('2026-01-01')
-    const { params, state, termFallback } = mortgageToParams({ mortgage, events: [], settings, today })
+    const { params } = mortgageToParams({ mortgage, events: [], settings, today })
 
+    expect(params.downPayment).toBe(mortgage.downPayment)
     expect(params.apartmentPrice).toBe(mortgage.propertyPrice)
-    expect(params.itRate).toBe(state.currentRate)
-    expect(termFallback).toBe(false)
-    expect(params.apartmentPrice - params.downPayment).toBe(Math.round(state.currentBalance))
   })
 
-  it('С balance-событием — остаток берётся из события, а не из плановой прокрутки', () => {
-    const mortgage = baseMortgage()
-    const events = [ev({ kind: 'balance', occurredOn: '2025-07-01', amount: 5_000_000 })]
-    const today = new Date('2025-08-01')
-
-    const { params, state } = mortgageToParams({ mortgage, events, settings, today })
-    expect(state.currentBalance).toBeLessThan(5_000_000) // месяц спустя долг чуть уменьшился
-    expect(params.apartmentPrice - params.downPayment).toBe(Math.round(state.currentBalance))
-  })
-
-  it('С rate-событием — itRate отражает изменившуюся ставку', () => {
+  it('И8: itRate === fact.engine.rate, apartmentPrice === propertyPrice, downPayment === mortgage.downPayment', () => {
     const mortgage = baseMortgage()
     const events = [ev({ kind: 'rate', occurredOn: '2025-06-01', rate: 8, amount: null })]
     const today = new Date('2025-09-01')
 
-    const { params } = mortgageToParams({ mortgage, events, settings, today })
-    expect(params.itRate).toBe(8)
+    const { params, fact } = mortgageToParams({ mortgage, events, settings, today })
+    expect(params.itRate).toBe(fact.engine.rate)
+    expect(params.apartmentPrice).toBe(mortgage.propertyPrice)
+    expect(params.downPayment).toBe(mortgage.downPayment)
   })
 
-  it('monthsLeft === null (платёж не покрывает проценты) → termFallback === true', () => {
+  it('С balance-событием — itRate и downPayment не зависят от снимка остатка', () => {
+    const mortgage = baseMortgage()
+    const events = [ev({ kind: 'balance', occurredOn: '2025-07-01', amount: 5_000_000 })]
+    const today = new Date('2025-08-01')
+
+    const { params, fact } = mortgageToParams({ mortgage, events, settings, today })
+    expect(fact.engine.debt).toBeLessThan(5_000_000) // месяц спустя долг чуть уменьшился
+    expect(params.downPayment).toBe(mortgage.downPayment) // взнос — не функция от остатка
+    expect(params.apartmentPrice).toBe(mortgage.propertyPrice)
+  })
+
+  it('termFallback === !fact.paymentCoversInterest (переименованный смысл)', () => {
     // Ставка огромная, платёж мизерный — проценты растут быстрее платежа
     const mortgage = baseMortgage({ rate: 50, monthlyPayment: 1000, termMonths: 240 })
     const today = new Date('2025-06-01')
 
-    const { state, termFallback, params } = mortgageToParams({ mortgage, events: [], settings, today })
-    expect(state.monthsLeft).toBeNull()
+    const { fact, termFallback, params } = mortgageToParams({ mortgage, events: [], settings, today })
+    expect(fact.paymentCoversInterest).toBe(false)
     expect(termFallback).toBe(true)
     expect(params.termYears).toBeGreaterThanOrEqual(1)
     expect(params.termYears).toBeLessThanOrEqual(30)
   })
 
-  it('закрытая ипотека (currentBalance === 0) — downPayment === propertyPrice, loanAmount === 0', () => {
+  it('обычная ипотека (платёж покрывает проценты) — termFallback === false', () => {
+    const mortgage = baseMortgage()
+    const today = new Date('2026-01-01')
+    const { termFallback, fact } = mortgageToParams({ mortgage, events: [], settings, today })
+    expect(fact.paymentCoversInterest).toBe(true)
+    expect(termFallback).toBe(false)
+  })
+
+  it('закрытая ипотека (currentBalance === 0) — downPayment остаётся реальным взносом по договору', () => {
     const mortgage = baseMortgage()
     const events = [ev({ kind: 'balance', occurredOn: '2025-06-01', amount: 0 })]
     const today = new Date('2025-07-01')
 
-    const { params, state } = mortgageToParams({ mortgage, events, settings, today })
-    expect(state.currentBalance).toBe(0)
-    expect(params.downPayment).toBe(mortgage.propertyPrice)
-    expect(params.apartmentPrice - params.downPayment).toBe(0)
+    const { params, fact } = mortgageToParams({ mortgage, events, settings, today })
+    expect(fact.engine.debt).toBe(0)
+    expect(params.downPayment).toBe(mortgage.downPayment)
   })
 
-  it('инвариант apartmentPrice − downPayment === round(currentBalance) держится во всех кейсах выше', () => {
-    const mortgage = baseMortgage()
-    const events = [
-      ev({ kind: 'balance', occurredOn: '2025-03-01', amount: 5_200_000 }),
-      ev({ kind: 'prepayment', occurredOn: '2025-05-01', amount: 300_000 }),
-    ]
-    const today = new Date('2025-09-01')
-    const { params } = mortgageToParams({ mortgage, events, settings, today })
-    const state = computeMortgageState(mortgage, events, today)
-    expect(params.apartmentPrice - params.downPayment).toBe(Math.round(state.currentBalance))
+  it('термYears покрывает остаток срока: clamp(ceil(fact.engine.remainingMonths / 12), 1, 30)', () => {
+    const mortgage = baseMortgage({ termMonths: 84 }) // 7 лет
+    const today = new Date('2026-01-01') // 12 месяцев прошло
+    const { params, fact } = mortgageToParams({ mortgage, events: [], settings, today })
+
+    expect(fact.engine.remainingMonths).toBe(84 - 12)
+    expect(params.termYears).toBe(Math.ceil((84 - 12) / 12))
   })
 
-  it('horizonYears не превышает термYears', () => {
-    const mortgage = baseMortgage({ termMonths: 24 })
+  it('горизонт не ужимается сроком ипотеки (§7.4 спеки) — короткий остаток срока не режет horizonYears', () => {
+    const mortgage = baseMortgage({ termMonths: 24 }) // короткий срок
     const today = new Date('2025-01-01')
-    const { params } = mortgageToParams({ mortgage, events: [], settings, today })
-    expect(params.horizonYears).toBeLessThanOrEqual(params.termYears)
+    const settingsLongHorizon: AccountSettings = { ...settings, horizonYears: 15 }
+    const { params } = mortgageToParams({ mortgage, events: [], settings: settingsLongHorizon, today })
+
+    expect(params.horizonYears).toBe(15)
+    expect(params.termYears).toBeLessThan(params.horizonYears)
   })
 
-  // ─── §2.4 дизайна: startingSavings, usedPropertyBase/usedInterestBase, history ───────
-  it('три новых поля доезжают до params: startingSavings из settings, вычеты из mortgage', () => {
+  it('три поля доезжают до params: startingSavings из settings, вычеты из mortgage', () => {
     const mortgage = baseMortgage({ usedPropertyBase: 700_000, usedInterestBase: 150_000 })
     const today = new Date('2026-01-01')
     const settingsWithSavings: AccountSettings = { ...settings, startingSavings: 1_200_000 }
@@ -129,21 +144,25 @@ describe('mortgageToParams', () => {
     expect(params.usedInterestBase).toBe(150_000)
   })
 
-  it('history.points.length − 1 === elapsedMonths', () => {
+  it('fact.engine.debt === state.currentBalance', () => {
     const mortgage = baseMortgage()
-    const today = new Date('2026-01-01')
-    const { history } = mortgageToParams({ mortgage, events: [], settings, today })
-    expect(history.points.length - 1).toBe(history.elapsedMonths)
-    expect(history.elapsedMonths).toBe(12)
+    const events = [
+      ev({ kind: 'balance', occurredOn: '2025-03-01', amount: 5_200_000 }),
+      ev({ kind: 'prepayment', occurredOn: '2025-05-01', amount: 300_000 }),
+    ]
+    const today = new Date('2025-09-01')
+    const { fact } = mortgageToParams({ mortgage, events, settings, today })
+    const state = computeMortgageState(mortgage, events, today)
+    expect(fact.engine.debt).toBe(state.currentBalance)
   })
 
-  it('apartmentPrice − downPayment === round(history.points.at(-1).debt)', () => {
+  it('fact, возвращённый mortgageToParams, совпадает с buildMortgageFact напрямую', () => {
     const mortgage = baseMortgage()
-    const events = [ev({ kind: 'balance', occurredOn: '2025-06-01', amount: 5_200_000 })]
-    const today = new Date('2025-09-01')
-    const { params, history } = mortgageToParams({ mortgage, events, settings, today })
-    const last = history.points[history.points.length - 1]
-    expect(params.apartmentPrice - params.downPayment).toBe(Math.round(last.debt))
+    const events = [ev({ kind: 'rate', occurredOn: '2025-06-01', rate: 7, amount: null })]
+    const today = new Date('2025-12-01')
+    const { fact } = mortgageToParams({ mortgage, events, settings, today })
+    const direct = buildMortgageFact(mortgage, events, today)
+    expect(fact).toEqual(direct)
   })
 
   it('accountSettingsFromParams включает startingSavings', () => {

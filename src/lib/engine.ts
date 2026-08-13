@@ -65,6 +65,30 @@ export interface MortgageParams {
   usedInterestBase: number;
 }
 
+/**
+ * Фактическое состояние ипотеки на «сегодня» — вход прогноза.
+ * Строится трекером (`buildMortgageFact`), движок его только читает и не знает про даты.
+ * null — гостевой сценарий: кредит берётся сейчас, прошлого нет.
+ */
+export interface FactPhase {
+  /** Остаток долга на «сегодня», ₽ — стартовая точка прогноза */
+  debt: number;
+  /** Действующая ставка на «сегодня», % годовых */
+  rate: number;
+  /** Действующий обязательный платёж на «сегодня», ₽ */
+  payment: number;
+  /** Остаток срока на «сегодня», месяцев; всегда ≥ 1 */
+  remainingMonths: number;
+  /** Уплачено процентов с выдачи до «сегодня», ₽ */
+  paidInterest: number;
+  /** Внесено банку с выдачи до «сегодня» (обязательные платежи + досрочки), ₽ */
+  paidTotal: number;
+  /** Месяцев от «сегодня» до конца текущего календарного года, 0…11 */
+  taxSettleOffset: number;
+  /** Календарный год «сегодня» — метка для TaxInfo.byYear[].calendarYear */
+  currentYear: number;
+}
+
 /** Одна точка помесячного ряда (отображаемый сценарий) */
 export interface MonthlyPoint {
   month: number;
@@ -84,6 +108,10 @@ export interface MonthlyPoint {
   netWorthSave: number;
   /** Текущий обязательный платёж: копить */
   paymentSave: number;
+  /** Проценты, начисленные в этом месяце, стратегия «гасить досрочно», ₽ */
+  interestPrepay: number;
+  /** Проценты, начисленные в этом месяце, стратегия «копить», ₽ */
+  interestSave: number;
 }
 
 /** Точка анализа слёта: что будет с платежом, если слёт случится в этот месяц */
@@ -106,11 +134,14 @@ export interface TaxInfo {
   interestReturnTotal: number;
   /** Вычеты по годам */
   byYear: Array<{
+    /** Порядковый год прогноза, 1…N (как раньше) */
     year: number;
     /** Суммарный возврат за год */
     amount: number;
     /** Имущественная часть возврата */
     propertyReturn: number;
+    /** Календарный год; null — гостевой сценарий (календаря нет) */
+    calendarYear: number | null;
   }>;
   /** База имущественного вычета, доступная на «сегодня» (после вычитания использованной), ₽ */
   propertyBaseStart: number;
@@ -140,6 +171,10 @@ export interface StrategyResult {
   investmentIncome: number;
   /** Месяц полного погашения долга (null — не погашен в горизонте) */
   debtFreeMonth: number | null;
+  /** Уплачено банку с выдачи ипотеки: факт + прогноз, ₽ (без факт-фазы === totalPaid) */
+  totalPaidWithFact: number;
+  /** Уплачено процентов с выдачи ипотеки: факт + прогноз, ₽ (без факт-фазы === totalInterest) */
+  totalInterestWithFact: number;
 }
 
 /** Детали сценария слёта (только при slipMonth > 0) */
@@ -304,6 +339,35 @@ interface SimPoint {
   savings: number;
   /** Обязательный платёж следующего месяца */
   payment: number;
+  /** Проценты, начисленные в этом месяце (0 для t = 0) */
+  interest: number;
+}
+
+/** Стартовое состояние прогноза — единственное место, где берётся сумма кредита, ставка,
+ *  срок и стартовый платёж (§3.1 спеки docs/specs/2026-08-14-continuous-simulation-design.md). */
+interface LoanStart {
+  debt: number;
+  ratePct: number;
+  months: number;
+  payment: number;
+}
+
+/**
+ * `fact` — фактическое состояние ипотеки на «сегодня» (из трекера). null — гостевой
+ * сценарий: кредит берётся сейчас по вводным параметрам.
+ */
+function resolveStart(p: MortgageParams, fact: FactPhase | null): LoanStart {
+  if (fact) {
+    return {
+      debt: fact.debt,
+      ratePct: fact.rate,
+      months: Math.max(1, fact.remainingMonths),
+      payment: fact.payment,
+    };
+  }
+  const debt = Math.max(0, p.apartmentPrice - p.downPayment);
+  const months = p.termYears * 12;
+  return { debt, ratePct: p.itRate, months, payment: calcPMT(debt, p.itRate / 1200, months) };
 }
 
 interface SimResult {
@@ -314,7 +378,7 @@ interface SimResult {
   taxReturnTotal: number;
   propertyReturnTotal: number;
   interestReturnTotal: number;
-  taxByYear: Array<{ year: number; amount: number; propertyReturn: number }>;
+  taxByYear: Array<{ year: number; amount: number; propertyReturn: number; calendarYear: number | null }>;
   investmentIncome: number;
   debtFreeMonth: number | null;
   /** База имущественного вычета, доступная на «сегодня» (до расходования в симуляции), ₽ */
@@ -344,12 +408,9 @@ interface SimResult {
  *   переносятся на следующие годы. Возврат у save идёт в накопления,
  *   у prepay — в досрочное погашение (после погашения долга — в накопления).
  */
-function simulateStrategy(params: MortgageParams, opts: SimOptions): SimResult {
+function simulateStrategy(params: MortgageParams, opts: SimOptions, fact: FactPhase | null): SimResult {
   const {
     apartmentPrice,
-    downPayment,
-    itRate,
-    termYears,
     freeMonthly,
     depositRate,
     horizonYears,
@@ -362,18 +423,19 @@ function simulateStrategy(params: MortgageParams, opts: SimOptions): SimResult {
   } = params;
   const { strategy, slipMonth, dumpSavingsAtSlip } = opts;
 
-  const loanAmount = Math.max(0, apartmentPrice - downPayment);
-  const n = termYears * 12;
+  const start = resolveStart(params, fact);
+  const n = start.months;
   const horizonMonths = horizonYears * 12;
-  const rIt = itRate / 12 / 100;
   const rMarket = (keyRate - bankDiscount + 1.5) / 12 / 100;
   const rDeposit = depositRate / 12 / 100;
 
-  let debt = loanAmount;
+  let debt = start.debt;
   let savings = startingSavings;
-  let rate = rIt;
+  let rate = start.ratePct / 1200;
   // Обязательный аннуитет. Для save фиксируется до слёта; для prepay пересчитывается ежемесячно.
-  let pmt = calcPMT(loanAmount, rate, n);
+  let pmt = start.payment;
+
+  const offset = fact ? fact.taxSettleOffset : 12;
 
   let totalPaid = 0;
   let totalInterest = 0;
@@ -386,15 +448,77 @@ function simulateStrategy(params: MortgageParams, opts: SimOptions): SimResult {
   let interestBaseRemaining = Math.max(0, INTEREST_DEDUCTION_BASE_LIMIT - usedInterestBase);
   const propertyBaseStart = propertyBaseRemaining;
   const interestBaseStart = interestBaseRemaining;
-  /** Уплаченные проценты, ещё не заявленные к вычету (перенос между годами) */
-  let interestDeductiblePool = 0;
+  /** Уплаченные проценты, ещё не заявленные к вычету (перенос между годами). При переданном
+   *  факте — незаявленные проценты факт-фазы переносятся в пул первого года прогноза (§3.3). */
+  let interestDeductiblePool = fact ? Math.max(0, fact.paidInterest - usedInterestBase) : 0;
 
   let taxReturnTotal = 0;
   let propertyReturnTotal = 0;
   let interestReturnTotal = 0;
-  const taxByYear: Array<{ year: number; amount: number; propertyReturn: number }> = [];
+  const taxByYear: Array<{ year: number; amount: number; propertyReturn: number; calendarYear: number | null }> = [];
 
   const points: SimPoint[] = new Array(horizonMonths + 1);
+
+  /** Досрочное внесение суммы в долг с пересчётом аннуитета (в конце месяца t) */
+  const prepayIntoDebt = (amount: number, t: number): number => {
+    const applied = Math.min(amount, debt);
+    debt -= applied;
+    totalPaid += applied;
+    if (debt <= 0.005) {
+      debt = 0;
+      if (debtFreeMonth === null) debtFreeMonth = t;
+      pmt = 0;
+    } else if (strategy === 'save') {
+      // save пересчитывает аннуитет только на событиях (слёт/вычет-в-досрочку не бывает)
+      pmt = calcPMT(debt, rate, Math.max(1, n - t));
+    }
+    return applied;
+  };
+
+  /**
+   * Начисление налогового вычета за календарный год, заканчивающийся в месяце `t`
+   * (`k` — порядковый номер года прогноза от нуля). Вынесено в замыкание (§3.3 спеки), потому
+   * что вызывается и внутри цикла на границе года, и один раз до записи points[0], если
+   * «сегодня» — конец календарного года (`offset === 0`).
+   */
+  const settleTaxYear = (t: number, k: number): void => {
+    // Имущественная база расходуется первой, процентная — из остатка дохода
+    const propUse = Math.min(propertyBaseRemaining, annualIncome);
+    const intUse = Math.min(interestDeductiblePool, interestBaseRemaining, Math.max(0, annualIncome - propUse));
+
+    const taxFull = calcActualNDFL(annualIncome);
+    const taxAfterProperty = calcActualNDFL(annualIncome - propUse);
+    const taxAfterBoth = calcActualNDFL(annualIncome - propUse - intUse);
+
+    const propertyReturn = taxFull - taxAfterProperty;
+    const interestReturn = taxAfterProperty - taxAfterBoth;
+    const totalReturn = propertyReturn + interestReturn;
+
+    propertyBaseRemaining -= propUse;
+    interestBaseRemaining -= intUse;
+    interestDeductiblePool -= intUse;
+
+    propertyReturnTotal += propertyReturn;
+    interestReturnTotal += interestReturn;
+    taxReturnTotal += totalReturn;
+    taxByYear.push({
+      year: k + 1,
+      amount: Math.round(totalReturn),
+      propertyReturn: Math.round(propertyReturn),
+      calendarYear: fact ? fact.currentYear + k : null,
+    });
+
+    // Возврат: save — в накопления, prepay — в досрочку (или в накопления, если долга нет)
+    if (totalReturn > 0) {
+      if (strategy === 'prepay' && debt > 0) {
+        const applied = prepayIntoDebt(totalReturn, t);
+        pmt = debt > 0 ? calcPMT(debt, rate, Math.max(1, n - t)) : 0;
+        savings += totalReturn - applied;
+      } else {
+        savings += totalReturn;
+      }
+    }
+  };
 
   // Дамп стартовых накоплений в долг для prepay ДО записи points[0] (§1.6, §3.1 дизайна):
   // политика «всё свободное — в долг» распространяется и на уже имеющиеся деньги, иначе
@@ -414,28 +538,20 @@ function simulateStrategy(params: MortgageParams, opts: SimOptions): SimResult {
   }
   if (debtFreeMonth === null && debt <= 0) debtFreeMonth = 0;
 
-  points[0] = { month: 0, debt, savings, payment: pmt };
+  // Начисление вычета за текущий (уже истёкший) календарный год до старта прогноза —
+  // только когда «сегодня» приходится на конец календарного года (offset === 0).
+  if (salary !== null && offset === 0) {
+    settleTaxYear(0, 0);
+  }
 
-  /** Досрочное внесение суммы в долг с пересчётом аннуитета (в конце месяца t) */
-  const prepayIntoDebt = (amount: number, t: number): number => {
-    const applied = Math.min(amount, debt);
-    debt -= applied;
-    totalPaid += applied;
-    if (debt <= 0.005) {
-      debt = 0;
-      if (debtFreeMonth === null) debtFreeMonth = t;
-      pmt = 0;
-    } else if (strategy === 'save') {
-      // save пересчитывает аннуитет только на событиях (слёт/вычет-в-досрочку не бывает)
-      pmt = calcPMT(debt, rate, Math.max(1, n - t));
-    }
-    return applied;
-  };
+  points[0] = { month: 0, debt, savings, payment: pmt, interest: 0 };
 
   for (let t = 1; t <= horizonMonths; t++) {
     // --- Ежемесячный платёж ---
+    let monthInterest = 0;
     if (debt > 0 && t <= n) {
       const interest = debt * rate;
+      monthInterest = interest;
       totalInterest += interest;
       interestDeductiblePool += interest;
 
@@ -486,46 +602,12 @@ function simulateStrategy(params: MortgageParams, opts: SimOptions): SimResult {
       }
     }
 
-    // --- Налоговые вычеты (конец года) ---
-    if (salary !== null && t % 12 === 0) {
-      // Имущественная база расходуется первой, процентная — из остатка дохода
-      const propUse = Math.min(propertyBaseRemaining, annualIncome);
-      const intUse = Math.min(interestDeductiblePool, interestBaseRemaining, Math.max(0, annualIncome - propUse));
-
-      const taxFull = calcActualNDFL(annualIncome);
-      const taxAfterProperty = calcActualNDFL(annualIncome - propUse);
-      const taxAfterBoth = calcActualNDFL(annualIncome - propUse - intUse);
-
-      const propertyReturn = taxFull - taxAfterProperty;
-      const interestReturn = taxAfterProperty - taxAfterBoth;
-      const totalReturn = propertyReturn + interestReturn;
-
-      propertyBaseRemaining -= propUse;
-      interestBaseRemaining -= intUse;
-      interestDeductiblePool -= intUse;
-
-      propertyReturnTotal += propertyReturn;
-      interestReturnTotal += interestReturn;
-      taxReturnTotal += totalReturn;
-      taxByYear.push({
-        year: t / 12,
-        amount: Math.round(totalReturn),
-        propertyReturn: Math.round(propertyReturn),
-      });
-
-      // Возврат: save — в накопления, prepay — в досрочку (или в накопления, если долга нет)
-      if (totalReturn > 0) {
-        if (strategy === 'prepay' && debt > 0) {
-          const applied = prepayIntoDebt(totalReturn, t);
-          pmt = debt > 0 ? calcPMT(debt, rate, Math.max(1, n - t)) : 0;
-          savings += totalReturn - applied;
-        } else {
-          savings += totalReturn;
-        }
-      }
+    // --- Налоговые вычеты (конец календарного года, §3.3 спеки) ---
+    if (salary !== null && t >= offset && (t - offset) % 12 === 0) {
+      settleTaxYear(t, (t - offset) / 12);
     }
 
-    points[t] = { month: t, debt, savings, payment: pmt };
+    points[t] = { month: t, debt, savings, payment: pmt, interest: monthInterest };
   }
 
   return {
@@ -549,8 +631,8 @@ function simulateStrategy(params: MortgageParams, opts: SimOptions): SimResult {
 // Основная функция
 // ---------------------------------------------------------------------------
 
-/** Итоги стратегии из результата симуляции */
-function toStrategyResult(sim: SimResult): StrategyResult {
+/** Итоги стратегии из результата симуляции; `fact` — для итогов «с учётом факта» (§3.4 спеки) */
+function toStrategyResult(sim: SimResult, fact: FactPhase | null): StrategyResult {
   const last = sim.points[sim.points.length - 1];
   return {
     netWorth: Math.round(last.savings - last.debt),
@@ -561,24 +643,34 @@ function toStrategyResult(sim: SimResult): StrategyResult {
     taxReturnTotal: Math.round(sim.taxReturnTotal),
     investmentIncome: Math.round(sim.investmentIncome),
     debtFreeMonth: sim.debtFreeMonth,
+    totalPaidWithFact: Math.round(sim.totalPaid + (fact?.paidTotal ?? 0)),
+    totalInterestWithFact: Math.round(sim.totalInterest + (fact?.paidInterest ?? 0)),
   };
 }
 
 /**
  * Рассчитывает сравнение подходов «гасить досрочно» и «копить»
  * с учётом сценария слёта с льготной программы.
+ *
+ * `fact === null | undefined` — гостевой сценарий: кредит берётся сейчас, поведение побайтово
+ * прежнее. `fact !== null` — прогноз продолжает фактическую ипотеку: сумма кредита, ставка,
+ * платёж и остаток срока берутся из `fact`, а `downPayment`, `itRate`, `termYears` движком
+ * не используются (§11 И7 спеки).
  */
-export function calculate(params: MortgageParams): CalculationResult {
-  const { apartmentPrice, downPayment, itRate, termYears, horizonYears, keyRate, bankDiscount, salary } = params;
+export function calculate(params: MortgageParams, fact?: FactPhase | null): CalculationResult {
+  const { horizonYears, keyRate, bankDiscount, salary } = params;
+  const factPhase: FactPhase | null = fact ?? null;
 
-  const loanAmount = Math.max(0, apartmentPrice - downPayment);
-  const n = termYears * 12;
+  // Единственное место, где берётся сумма кредита, ставка, срок и стартовый платёж (§3.1 спеки).
+  const start = resolveStart(params, factPhase);
+  const loanAmount = start.debt;
+  const n = start.months;
   const horizonMonths = horizonYears * 12;
-  const rIt = itRate / 12 / 100;
 
-  const rawMinPayment = calcPMT(loanAmount, rIt, n);
-  const minPayment = Math.round(rawMinPayment);
-  const totalInterest = Math.round(rawMinPayment * n - loanAmount);
+  const minPayment = Math.round(start.payment);
+  // Одно выражение на оба режима: для гостя factInterest = 0 и max(0, …) — тождественный no-op.
+  const factInterest = factPhase ? factPhase.paidInterest : 0;
+  const totalInterest = Math.round(factInterest + Math.max(0, start.payment * start.months - start.debt));
 
   const marketRateAtSlip = keyRate - bankDiscount + 1.5;
   const rMarket = marketRateAtSlip / 12 / 100;
@@ -589,18 +681,18 @@ export function calculate(params: MortgageParams): CalculationResult {
   // -------------------------------------------------------------------------
   // Симуляции: базовые всегда, слётные — при slipMonth > 0
   // -------------------------------------------------------------------------
-  const basePrepay = simulateStrategy(params, { strategy: 'prepay', slipMonth: 0, dumpSavingsAtSlip: false });
-  const baseSave = simulateStrategy(params, { strategy: 'save', slipMonth: 0, dumpSavingsAtSlip: false });
+  const basePrepay = simulateStrategy(params, { strategy: 'prepay', slipMonth: 0, dumpSavingsAtSlip: false }, factPhase);
+  const baseSave = simulateStrategy(params, { strategy: 'save', slipMonth: 0, dumpSavingsAtSlip: false }, factPhase);
 
   const hasSlip = effectiveSlip > 0;
   const slipPrepay = hasSlip
-    ? simulateStrategy(params, { strategy: 'prepay', slipMonth: effectiveSlip, dumpSavingsAtSlip: false })
+    ? simulateStrategy(params, { strategy: 'prepay', slipMonth: effectiveSlip, dumpSavingsAtSlip: false }, factPhase)
     : basePrepay;
   const slipSaveDump = hasSlip
-    ? simulateStrategy(params, { strategy: 'save', slipMonth: effectiveSlip, dumpSavingsAtSlip: true })
+    ? simulateStrategy(params, { strategy: 'save', slipMonth: effectiveSlip, dumpSavingsAtSlip: true }, factPhase)
     : baseSave;
   const slipSaveNoDump = hasSlip
-    ? simulateStrategy(params, { strategy: 'save', slipMonth: effectiveSlip, dumpSavingsAtSlip: false })
+    ? simulateStrategy(params, { strategy: 'save', slipMonth: effectiveSlip, dumpSavingsAtSlip: false }, factPhase)
     : baseSave;
 
   // Отображаемый сценарий: со слётом, если он задан
@@ -624,6 +716,8 @@ export function calculate(params: MortgageParams): CalculationResult {
       savingsSave: Math.round(s.savings),
       netWorthSave: Math.round(s.savings - s.debt),
       paymentSave: Math.round(s.payment),
+      interestPrepay: Math.round(p.interest),
+      interestSave: Math.round(s.interest),
     };
   }
 
@@ -722,8 +816,8 @@ export function calculate(params: MortgageParams): CalculationResult {
   // -------------------------------------------------------------------------
   // Итоги
   // -------------------------------------------------------------------------
-  const prepayResult = toStrategyResult(shownPrepay);
-  const saveResult = toStrategyResult(shownSave);
+  const prepayResult = toStrategyResult(shownPrepay, factPhase);
+  const saveResult = toStrategyResult(shownSave, factPhase);
 
   return {
     loanAmount,

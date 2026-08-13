@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest'
 import { calculate, calcPMT, refundToBase } from '../engine'
+import { buildMortgageFact } from '../tracker'
 import type { MortgageParams } from '../engine'
+import type { MortgageDto, MortgageEventDto } from '../../api/types'
 
 // ─── Фабрика параметров по умолчанию ───────────────────────────────────────
 // loanAmount = apartmentPrice - downPayment = 7_000_000 - 1_500_000 = 5_500_000
@@ -448,5 +450,237 @@ describe('refundToBase', () => {
     expect(refundToBase(0, null)).toBe(0)
     expect(refundToBase(-100, null)).toBe(0)
     expect(refundToBase(NaN, null)).toBe(0)
+  })
+})
+
+// ─── 11. Инварианты §11 спеки docs/specs/2026-08-14-continuous-simulation-design.md ───────
+// Новый раздел (дописан целиком, §1–10 выше не изменены).
+const trackerMortgage = (over: Partial<MortgageDto> = {}): MortgageDto => ({
+  id: 1,
+  title: 'Квартира на Ленина',
+  bank: 'Сбер',
+  propertyPrice: 7_000_000,
+  downPayment: 1_500_000,
+  principal: 5_500_000,
+  rate: 6,
+  termMonths: 240,
+  startedOn: '2021-01-01',
+  monthlyPayment: null,
+  usedPropertyBase: 0,
+  usedInterestBase: 0,
+  createdAt: '2021-01-01T00:00:00Z',
+  updatedAt: '2021-01-01T00:00:00Z',
+  ...over,
+})
+
+let nextFactEventId = 1
+const factEv = (partial: Partial<MortgageEventDto>): MortgageEventDto => ({
+  id: nextFactEventId++,
+  mortgageId: 1,
+  kind: 'balance',
+  occurredOn: '2021-01-01',
+  amount: null,
+  rate: null,
+  note: null,
+  createdAt: '2021-01-01T00:00:00Z',
+  ...partial,
+})
+
+describe('И2: тождество платежа в прогнозе (interest + Δdebt)', () => {
+  it('Σ(interest + Δdebt) по series === summary.totalPaid для обеих стратегий (без слёта, без стартовых накоплений)', () => {
+    const result = calculate(noSlip())
+
+    let sumPrepay = 0
+    let sumSave = 0
+    for (let t = 1; t < result.series.length; t++) {
+      sumPrepay += result.series[t].interestPrepay + (result.series[t - 1].debtPrepay - result.series[t].debtPrepay)
+      sumSave += result.series[t].interestSave + (result.series[t - 1].debtSave - result.series[t].debtSave)
+    }
+
+    expect(Math.abs(sumPrepay - result.summary.prepay.totalPaid)).toBeLessThan(result.series.length * 2)
+    expect(Math.abs(sumSave - result.summary.save.totalPaid)).toBeLessThan(result.series.length * 2)
+  })
+})
+
+describe('И5: равенство стартового капитала стратегий', () => {
+  it('series[0].netWorthPrepay === series[0].netWorthSave при любом startingSavings (гость)', () => {
+    const result = calculate({ ...defaultParams(), startingSavings: 900_000 })
+    expect(result.series[0].netWorthPrepay).toBe(result.series[0].netWorthSave)
+  })
+
+  it('держится и с факт-фазой, включая taxSettleOffset === 0 (сегодня — декабрь)', () => {
+    const m = trackerMortgage()
+    const fact = buildMortgageFact(m, [], new Date('2026-12-31')) // offset === 0
+    expect(fact.engine.taxSettleOffset).toBe(0)
+
+    const p: MortgageParams = { ...defaultParams(), startingSavings: 500_000, salary: 300_000, slipMonth: 0 }
+    const result = calculate(p, fact.engine)
+    expect(result.series[0].netWorthPrepay).toBe(result.series[0].netWorthSave)
+  })
+})
+
+describe('И6: эквивалентность гостю при elapsed === 0', () => {
+  it('ипотека, выданная в текущем месяце, без событий — calculate(p, fact) === calculate(p) с эквивалентными параметрами', () => {
+    const today = new Date('2026-03-01')
+    const m = trackerMortgage({ startedOn: '2026-03-01', principal: 5_500_000, rate: 6, termMonths: 240 })
+    const fact = buildMortgageFact(m, [], today)
+    expect(fact.elapsedMonths).toBe(0)
+    expect(fact.engine.paidInterest).toBe(0)
+    expect(fact.engine.remainingMonths).toBe(240)
+
+    const guestParams: MortgageParams = {
+      ...defaultParams(),
+      apartmentPrice: m.principal, // downPayment = 0 → loanAmount = principal
+      downPayment: 0,
+      itRate: m.rate,
+      termYears: m.termMonths / 12,
+    }
+    const factParams: MortgageParams = { ...defaultParams() } // downPayment/itRate/termYears игнорируются при факте
+
+    const guestResult = calculate(guestParams)
+    const factResult = calculate(factParams, fact.engine)
+
+    expect(factResult.loanAmount).toBe(guestResult.loanAmount)
+    expect(factResult.minPayment).toBe(guestResult.minPayment)
+    expect(factResult.totalInterest).toBe(guestResult.totalInterest)
+    // Допуск 2 ₽: fact.engine.payment — округлённое до копеек значение (DebtHistoryPoint.payment,
+    // §2.2 спеки), а не «сырой» calcPMT гостя; за 120 месяцев компаундинга это может на копейки
+    // сдвинуть округлённый до рубля остаток в отдельных месяцах (та же природа допуска, что в И2).
+    for (let t = 0; t < factResult.series.length; t++) {
+      const f = factResult.series[t] as unknown as Record<string, number>
+      const g = guestResult.series[t] as unknown as Record<string, number>
+      for (const key of Object.keys(f)) {
+        expect(Math.abs(f[key] - g[key])).toBeLessThanOrEqual(2)
+      }
+    }
+    expect(Math.abs(factResult.summary.prepay.netWorth - guestResult.summary.prepay.netWorth)).toBeLessThanOrEqual(5)
+    expect(Math.abs(factResult.summary.save.netWorth - guestResult.summary.save.netWorth)).toBeLessThanOrEqual(5)
+  })
+})
+
+describe('И7: прогноз не зависит от подменяемых вводных при переданной факт-фазе', () => {
+  it('изменение downPayment/termYears/itRate не меняет loanAmount/minPayment/series/summary', () => {
+    const m = trackerMortgage()
+    const fact = buildMortgageFact(m, [], new Date('2026-01-01'))
+
+    const base = calculate({ ...defaultParams(), slipMonth: 0 }, fact.engine)
+    const mutated = calculate(
+      { ...defaultParams(), slipMonth: 0, downPayment: 3_000_000, termYears: 5, itRate: 25 },
+      fact.engine,
+    )
+
+    expect(mutated.loanAmount).toBe(base.loanAmount)
+    expect(mutated.minPayment).toBe(base.minPayment)
+    expect(mutated.series).toEqual(base.series)
+    expect(mutated.summary).toEqual(base.summary)
+  })
+
+  it('apartmentPrice вправе менять результат (лимит имущественного вычета)', () => {
+    const m = trackerMortgage()
+    const fact = buildMortgageFact(m, [], new Date('2026-01-01'))
+
+    const base = calculate({ ...defaultParams(), slipMonth: 0, salary: 300_000, apartmentPrice: 7_000_000 }, fact.engine)
+    const changed = calculate({ ...defaultParams(), slipMonth: 0, salary: 300_000, apartmentPrice: 1_500_000 }, fact.engine)
+
+    expect(changed.tax!.propertyBaseStart).not.toBe(base.tax!.propertyBaseStart)
+  })
+})
+
+describe('И9: итоги с фактом', () => {
+  it('summary.save.totalInterestWithFact === summary.save.totalInterest + fact.paidInterest', () => {
+    const m = trackerMortgage()
+    const events = [factEv({ kind: 'prepayment', occurredOn: '2023-06-01', amount: 300_000 })]
+    const fact = buildMortgageFact(m, events, new Date('2026-01-01'))
+
+    const result = calculate({ ...defaultParams(), slipMonth: 0 }, fact.engine)
+    // Допуск 1 ₽: totalInterest/totalPaid и fact.paidInterest/paidTotal каждый уже округлён
+    // независимо (Math.round/round2), поэтому сумма двух округлённых величин может разойтись
+    // с округлением суммы на копейку.
+    expect(
+      Math.abs(result.summary.save.totalInterestWithFact - (result.summary.save.totalInterest + fact.engine.paidInterest)),
+    ).toBeLessThanOrEqual(1)
+    expect(
+      Math.abs(result.summary.save.totalPaidWithFact - (result.summary.save.totalPaid + fact.engine.paidTotal)),
+    ).toBeLessThanOrEqual(1)
+  })
+
+  it('без факт-фазы totalInterestWithFact === totalInterest, totalPaidWithFact === totalPaid', () => {
+    const result = calculate(noSlip())
+    expect(result.summary.save.totalInterestWithFact).toBe(result.summary.save.totalInterest)
+    expect(result.summary.save.totalPaidWithFact).toBe(result.summary.save.totalPaid)
+    expect(result.summary.prepay.totalInterestWithFact).toBe(result.summary.prepay.totalInterest)
+    expect(result.summary.prepay.totalPaidWithFact).toBe(result.summary.prepay.totalPaid)
+  })
+})
+
+describe('И10: переплата по графику', () => {
+  it('гость: totalInterest === round(calcPMT(L,r,n) × n − L)', () => {
+    const params = defaultParams()
+    const result = calculate(params)
+    const L = params.apartmentPrice - params.downPayment
+    const r = params.itRate / 1200
+    const n = params.termYears * 12
+    const pmt = calcPMT(L, r, n)
+    expect(result.totalInterest).toBe(Math.round(pmt * n - L))
+  })
+
+  it('режим ипотеки: totalInterest === round(fact.paidInterest + max(0, fact.payment × remainingMonths − fact.debt))', () => {
+    const m = trackerMortgage()
+    const fact = buildMortgageFact(m, [], new Date('2026-01-01'))
+    const result = calculate({ ...defaultParams(), slipMonth: 0 }, fact.engine)
+
+    const expected = Math.round(
+      fact.engine.paidInterest + Math.max(0, fact.engine.payment * fact.engine.remainingMonths - fact.engine.debt),
+    )
+    expect(result.totalInterest).toBe(expected)
+  })
+})
+
+describe('И11: календарные годы вычета', () => {
+  it('tax.byYear[i].calendarYear === fact.currentYear + i при taxSettleOffset = k', () => {
+    const m = trackerMortgage()
+    const fact = buildMortgageFact(m, [], new Date('2026-08-13')) // offset = 4
+    const result = calculate({ ...defaultParams(), slipMonth: 0, salary: 300_000, horizonYears: 5 }, fact.engine)
+
+    expect(result.tax!.byYear[0].calendarYear).toBe(fact.engine.currentYear)
+    for (let i = 0; i < result.tax!.byYear.length; i++) {
+      expect(result.tax!.byYear[i].calendarYear).toBe(fact.engine.currentYear + i)
+    }
+  })
+
+  it('у гостя все calendarYear === null, year остаётся 1…N', () => {
+    const result = calculate({ ...noSlip(), salary: 300_000, horizonYears: 5 })
+    expect(result.tax!.byYear.every((y) => y.calendarYear === null)).toBe(true)
+    expect(result.tax!.byYear.map((y) => y.year)).toEqual([1, 2, 3, 4, 5])
+  })
+})
+
+describe('И12: пул незаявленных процентов', () => {
+  it('usedInterestBase >= fact.paidInterest → прогнозный процентный вычет не больше, чем при usedInterestBase = fact.paidInterest', () => {
+    const m = trackerMortgage()
+    const events = [factEv({ kind: 'prepayment', occurredOn: '2023-06-01', amount: 300_000 })]
+    const fact = buildMortgageFact(m, events, new Date('2026-01-01'))
+
+    const atPaid = calculate(
+      { ...defaultParams(), slipMonth: 0, salary: 300_000, usedInterestBase: fact.engine.paidInterest },
+      fact.engine,
+    )
+    const aboveExact = calculate(
+      { ...defaultParams(), slipMonth: 0, salary: 300_000, usedInterestBase: fact.engine.paidInterest + 500_000 },
+      fact.engine,
+    )
+    expect(aboveExact.tax!.interestReturnTotal).toBeLessThanOrEqual(atPaid.tax!.interestReturnTotal)
+  })
+
+  it('usedInterestBase = 0 и fact.paidInterest > 0 → возврат первого года строго больше, чем без факта', () => {
+    const m = trackerMortgage()
+    const events = [factEv({ kind: 'prepayment', occurredOn: '2023-06-01', amount: 300_000 })]
+    const fact = buildMortgageFact(m, events, new Date('2026-01-01'))
+    expect(fact.engine.paidInterest).toBeGreaterThan(0)
+
+    const withFact = calculate({ ...defaultParams(), slipMonth: 0, salary: 300_000, usedInterestBase: 0 }, fact.engine)
+    const withoutFact = calculate({ ...defaultParams(), slipMonth: 0, salary: 300_000, usedInterestBase: 0 })
+
+    expect(withFact.tax!.byYear[0].amount).toBeGreaterThan(withoutFact.tax!.byYear[0].amount)
   })
 })

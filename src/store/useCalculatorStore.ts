@@ -2,6 +2,7 @@ import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { startTransition } from 'react'
 import { calculate, type MortgageParams, type CalculationResult } from '../lib/engine'
+import type { MortgageFact } from '../lib/tracker'
 import type { AccountSettings, MortgageDto } from '../api/types'
 import type { MortgageModeParams } from '../lib/mortgageToParams'
 
@@ -22,8 +23,9 @@ function isAccountSettingKey(key: string): key is AccountSettingKey {
   return (ACCOUNT_SETTING_KEYS as readonly string[]).includes(key)
 }
 
-/** Контекст режима ипотеки (§3.1 спеки) — персистится, сами параметры пересчитываются
- *  из свежих данных сервера при каждом входе на страницу калькулятора (§3.3). */
+/** Контекст режима ипотеки (§2.6 спеки continuous-simulation) — персистится; сама факт-фаза
+ *  (`mortgageFact`) НЕ персистится и пересобирается из данных сервера при каждом входе на
+ *  страницу калькулятора — иначе это второй источник истины, который может разойтись с трекером. */
 export interface LinkedMortgage {
   id: number
   title: string
@@ -33,23 +35,25 @@ export interface LinkedMortgage {
   balance: number
   /** Фактический платёж трекера — для баннера */
   payment: number
-  /** true — срок взят из планового графика (допущение 4 §2 спеки) */
+  /** true — текущий платёж не покрывает проценты (переименованный смысл, см. §2.2 спеки) */
   termFallback: boolean
   /** Ставка на момент входа в режим ипотеки (из mortgageToParams, заполняется в
    *  enterMortgageMode) — для баннера, не завязана на текущее положение слайдера ставки.
    *  Опционально: undefined в персисте, сохранённом до добавления поля — тогда строку
    *  ставки в баннере не показываем. */
   rate?: number
-  /** 'YYYY-MM-DD' — дата выдачи, для подписей оси таймлайна (§2.6 дизайна) */
+  /** 'YYYY-MM-DD' — дата выдачи, для подписей оси таймлайна */
   startedOn?: string
-  /** Компактная история: остаток долга по месяцам от выдачи; history[history.length-1] === balance */
-  history?: number[]
-  /** Σ уплаченных процентов за историю, ₽ — для выводов и помощника по вычетам */
+  /** Исходная сумма кредита, ₽ — для баннера, пока факт грузится (§2.6 спеки) */
+  principal?: number
+  /** Уплачено процентов, ₽ — для баннера, пока факт грузится */
   paidInterest?: number
+  /** Месяцев с выдачи — для баннера, пока факт грузится */
+  elapsedMonths?: number
 }
 
 /** Собирает `LinkedMortgage` из ипотеки и результата `mortgageToParams` — один хелпер
- *  вместо трёх копий в `MortgagePage` / `MortgageCard` / `CalculatorPage` (§2.6 дизайна). */
+ *  вместо трёх копий в `MortgagePage` / `MortgageCard` / `CalculatorPage`. */
 export function linkFromMortgage(m: MortgageDto, mapped: MortgageModeParams): LinkedMortgage {
   return {
     id: m.id,
@@ -59,10 +63,9 @@ export function linkFromMortgage(m: MortgageDto, mapped: MortgageModeParams): Li
     payment: mapped.state.currentPayment,
     termFallback: mapped.termFallback,
     startedOn: m.startedOn,
-    // Округляем до целого рубля — история хранится в персисте и на графиках компактно,
-    // копейки не нужны (то же округление, что в `computeMortgageState.currentBalance` → баннер).
-    history: mapped.history.points.map((p) => Math.round(p.debt)),
-    paidInterest: mapped.history.paidInterest,
+    principal: mapped.fact.principal,
+    paidInterest: mapped.fact.history.paidInterest,
+    elapsedMonths: mapped.fact.elapsedMonths,
   }
 }
 
@@ -74,6 +77,13 @@ interface CalculatorState {
   /** Тумблер сценария слёта. По умолчанию выключен — расчёт идёт по льготной ставке. */
   slipEnabled: boolean
   linkedMortgage: LinkedMortgage | null
+  /** Полное фактическое прошлое ипотеки — вход движка. НЕ персистится: пересобирается из
+   *  данных сервера при каждом входе на страницу (§2.6 спеки). null вне режима ипотеки
+   *  или пока факт ещё не загружен (см. `factError`). */
+  mortgageFact: MortgageFact | null
+  /** Текст ошибки загрузки факта; null — ошибки нет. Пока не null (и mortgageFact === null),
+   *  расчёт режима ипотеки недостоверен и на экран не выводится (§8.4 спеки). */
+  factError: string | null
   result: CalculationResult
   setParam: <K extends keyof MortgageParams>(key: K, value: MortgageParams[K]) => void
   /** Один пересчёт движка на несколько полей сразу (нужен для relinkLoan) */
@@ -82,11 +92,13 @@ interface CalculatorState {
   /** Месяц слёта, который реально участвует в расчёте: 0, если тумблер выключен. */
   effectiveSlipMonth: () => number
   /** Вход/обновление режима ипотеки. Идемпотентна: повторный вызов с теми же данными — no-op по смыслу */
-  enterMortgageMode: (link: LinkedMortgage, params: MortgageParams) => void
+  enterMortgageMode: (link: LinkedMortgage, params: MortgageParams, fact: MortgageFact) => void
   /** Возврат к своим параметрам */
   exitMortgageMode: () => void
   /** Применить настройки аккаунта (С3), не вызывая обратного PUT */
   applyAccountSettings: (s: AccountSettings) => void
+  /** Пометить, что факт не удалось загрузить (страница покажет алерт вместо графиков) */
+  setFactError: (message: string | null) => void
 }
 
 const defaultParams: MortgageParams = {
@@ -106,9 +118,11 @@ const defaultParams: MortgageParams = {
   usedInterestBase: 0,
 }
 
-/** Слёт уходит в движок только если тумблер включён — иначе params.slipMonth лишь «запомненная» позиция слайдера. */
-const recalc = (params: MortgageParams, slipEnabled: boolean): CalculationResult =>
-  calculate({ ...params, slipMonth: slipEnabled ? params.slipMonth : 0 })
+/** Слёт уходит в движок только если тумблер включён — иначе params.slipMonth лишь «запомненная»
+ *  позиция слайдера. Факт-фаза (§1 спеки continuous-simulation) передаётся движку как есть —
+ *  стор её не трогает, только хранит и прокидывает. */
+const recalc = (params: MortgageParams, slipEnabled: boolean, fact: MortgageFact | null): CalculationResult =>
+  calculate({ ...params, slipMonth: slipEnabled ? params.slipMonth : 0 }, fact?.engine ?? null)
 
 interface PersistedCalculatorState {
   params: MortgageParams
@@ -124,7 +138,9 @@ export const useCalculatorStore = create<CalculatorState>()(
       ownParams: defaultParams,
       slipEnabled: false,
       linkedMortgage: null,
-      result: recalc(defaultParams, false),
+      mortgageFact: null,
+      factError: null,
+      result: recalc(defaultParams, false, null),
       setParam: (key, value) => {
         const state = get()
         const newParams = { ...state.params, [key]: value }
@@ -135,7 +151,7 @@ export const useCalculatorStore = create<CalculatorState>()(
         const newOwnParams = patchOwn ? { ...state.ownParams, [key]: value } : state.ownParams
         set({ params: newParams, ownParams: newOwnParams })
         startTransition(() => {
-          set({ result: recalc(newParams, get().slipEnabled) })
+          set({ result: recalc(newParams, get().slipEnabled, get().mortgageFact) })
         })
       },
       setParams: (patch) => {
@@ -149,33 +165,33 @@ export const useCalculatorStore = create<CalculatorState>()(
         }
         set({ params: newParams, ownParams: newOwnParams })
         startTransition(() => {
-          set({ result: recalc(newParams, get().slipEnabled) })
+          set({ result: recalc(newParams, get().slipEnabled, get().mortgageFact) })
         })
       },
       setSlipEnabled: (value) => {
         set({ slipEnabled: value })
         startTransition(() => {
-          set({ result: recalc(get().params, value) })
+          set({ result: recalc(get().params, value, get().mortgageFact) })
         })
       },
       effectiveSlipMonth: () => (get().slipEnabled ? get().params.slipMonth : 0),
-      enterMortgageMode: (link, params) => {
+      enterMortgageMode: (link, params, fact) => {
         const state = get()
         // slipMonth — не трогаем, остаётся из ownParams (слёт — гипотеза, а не факт).
         const finalParams = { ...params, slipMonth: state.ownParams.slipMonth }
         // rate — фиксируем ставку на момент входа (из mortgageToParams), а не читаем её
         // из params.itRate живьём в баннере: слайдер калькулятора мог её сдвинуть.
         const finalLink: LinkedMortgage = { ...link, rate: params.itRate }
-        set({ linkedMortgage: finalLink, params: finalParams, slipEnabled: false })
+        set({ linkedMortgage: finalLink, mortgageFact: fact, factError: null, params: finalParams, slipEnabled: false })
         startTransition(() => {
-          set({ result: recalc(finalParams, false) })
+          set({ result: recalc(finalParams, false, fact) })
         })
       },
       exitMortgageMode: () => {
         const own = get().ownParams
-        set({ linkedMortgage: null, params: own })
+        set({ linkedMortgage: null, mortgageFact: null, factError: null, params: own })
         startTransition(() => {
-          set({ result: recalc(own, get().slipEnabled) })
+          set({ result: recalc(own, get().slipEnabled, null) })
         })
       },
       applyAccountSettings: (s) => {
@@ -190,25 +206,27 @@ export const useCalculatorStore = create<CalculatorState>()(
           // Старая строка (версия 1 настроек) отдаёт undefined — трактуем как 0, не NaN.
           startingSavings: s.startingSavings ?? 0,
         }
-        // Инвариант horizonYears ≤ termYears держим только для активных params: в режиме
-        // ипотеки termYears может быть короче серверного горизонта (например, 2 года до
-        // погашения). ownParams получает серверное значение как есть — сохраняем и не
-        // подменяем то, что реально лежит в настройках аккаунта.
+        // Инвариант horizonYears ≤ termYears держим только для гостя: в режиме ипотеки
+        // горизонт — это горизонт сравнения стратегий, а не срок кредита, кламп сроком
+        // ипотеки уничтожал бы сравнение на коротких остатках (§7.4 спеки). ownParams
+        // получает серверное значение как есть — сохраняем и не подменяем то, что реально
+        // лежит в настройках аккаунта.
         const newParams = {
           ...state.params,
           ...patch,
-          horizonYears: Math.min(s.horizonYears, state.params.termYears),
+          horizonYears: state.linkedMortgage === null ? Math.min(s.horizonYears, state.params.termYears) : s.horizonYears,
         }
         const newOwnParams = { ...state.ownParams, ...patch }
         set({ params: newParams, ownParams: newOwnParams })
         startTransition(() => {
-          set({ result: recalc(newParams, get().slipEnabled) })
+          set({ result: recalc(newParams, get().slipEnabled, get().mortgageFact) })
         })
       },
+      setFactError: (message) => set({ factError: message }),
     }),
     {
       name: 'mortgage-calculator-params',
-      version: 4,
+      version: 5,
       partialize: (state) => ({
         params: state.params,
         ownParams: state.ownParams,
@@ -235,14 +253,31 @@ export const useCalculatorStore = create<CalculatorState>()(
             linkedMortgage: null,
           }
         }
-        if (version < 4) {
-          // linkedMortgage.history в персисте v3 отсутствует — сбрасываем в undefined,
-          // страница калькулятора перезапросит свежую историю у трекера.
+        if (version < 5) {
+          // v3/v4 хранили в linkedMortgage поле `history: number[]` (компактный ряд остатков) —
+          // фаза 6 удаляет его из контракта: единственный источник прошлого теперь
+          // `mortgageFact`, который не персистится и перезапрашивается у сервера (§2.6 спеки).
+          // Пересобираем LinkedMortgage только из полей, которые остались в типе.
+          const oldLink = prev.linkedMortgage
+          const linkedMortgage: LinkedMortgage | null = oldLink
+            ? {
+                id: oldLink.id,
+                title: oldLink.title,
+                asOf: oldLink.asOf,
+                balance: oldLink.balance,
+                payment: oldLink.payment,
+                termFallback: oldLink.termFallback,
+                rate: oldLink.rate,
+                startedOn: oldLink.startedOn,
+                // principal/paidInterest/elapsedMonths — новые поля §2.6, старый персист их не
+                // содержит; страница calculator перезапросит факт и заполнит баннер актуальными числами.
+              }
+            : null
           return {
             params: fillNewFields(prev.params),
             ownParams: fillNewFields(prev.ownParams),
             slipEnabled: prev.slipEnabled ?? false,
-            linkedMortgage: prev.linkedMortgage ? { ...prev.linkedMortgage, history: undefined } : null,
+            linkedMortgage,
           }
         }
         return {
@@ -259,7 +294,12 @@ export const useCalculatorStore = create<CalculatorState>()(
           state.ownParams = { ...defaultParams, ...state.ownParams }
           state.slipEnabled = state.slipEnabled ?? false
           state.linkedMortgage = state.linkedMortgage ?? null
-          state.result = recalc(state.params, state.slipEnabled)
+          // Факт-фаза никогда не персистится (§2.6 спеки) — страница калькулятора перезапросит
+          // её у сервера; до этого гейт загрузки (linkedMortgage !== null && mortgageFact === null)
+          // покажет скелетон вместо недостоверного расчёта.
+          state.mortgageFact = null
+          state.factError = null
+          state.result = recalc(state.params, state.slipEnabled, null)
         }
       },
     }

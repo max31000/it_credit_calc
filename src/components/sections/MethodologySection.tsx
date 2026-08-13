@@ -10,15 +10,21 @@ import {
   Box,
   List,
 } from '@mantine/core'
-import { IconCalculator, IconReceipt, IconAlertTriangle, IconListCheck } from '@tabler/icons-react'
+import {
+  IconCalculator,
+  IconReceipt,
+  IconAlertTriangle,
+  IconListCheck,
+  IconHistory,
+} from '@tabler/icons-react'
 import { useCalculatorStore } from '../../store/useCalculatorStore'
 import { formatRub } from '../../lib/formatters'
 
 export const MethodologySection = memo(function MethodologySection() {
   const params = useCalculatorStore((s) => s.params)
   const result = useCalculatorStore((s) => s.result)
-  const linkedMortgage = useCalculatorStore((s) => s.linkedMortgage)
-  const hasHistory = !!linkedMortgage?.history && linkedMortgage.history.length > 0
+  const fact = useCalculatorStore((s) => s.mortgageFact)
+  const hasFact = fact !== null
 
   return (
     <Paper p="lg" shadow="sm" radius="md">
@@ -101,6 +107,34 @@ export const MethodologySection = memo(function MethodologySection() {
           </Accordion.Panel>
         </Accordion.Item>
 
+        {hasFact && (
+          <Accordion.Item value="mortgageFact">
+            <Accordion.Control>
+              <Group gap="xs">
+                <ThemeIcon color="grape" variant="light" size="sm">
+                  <IconHistory size={14} />
+                </ThemeIcon>
+                <Text fw={600}>Как считается идущая ипотека</Text>
+              </Group>
+            </Accordion.Control>
+            <Accordion.Panel>
+              <Text size="sm">
+                Если калькулятор открыт из связанной ипотеки, расчёт — не новый кредит, а
+                продолжение той же серии от даты выдачи. Прошлое (месяцы от выдачи до сегодня)
+                восстанавливается по событиям трекера: обязательные платежи, досрочные погашения,
+                смены ставки. Если банк присылал снимок остатка, он считается точнее расчёта и
+                «затирает» его, а не корректирует. Прогноз стартует не с нового кредита, а с
+                фактического остатка долга, действующей ставки и действующего платежа; оставшийся
+                срок берётся из договора, а не из проекции погашения — иначе прошлые досрочки
+                учлись бы дважды. Налоговые годы в прогнозе — календарные, а не «12 месяцев от
+                сегодня»: уже уплаченные, но ещё не заявленные проценты переносятся в первый
+                расчётный год. «Переплата по графику» — это уже уплаченные проценты плюс то, что
+                осталось по текущему графику до конца срока.
+              </Text>
+            </Accordion.Panel>
+          </Accordion.Item>
+        )}
+
         <Accordion.Item value="assumptions">
           <Accordion.Control>
             <Group gap="xs">
@@ -141,14 +175,7 @@ export const MethodologySection = memo(function MethodologySection() {
                 ставке НДФЛ (по указанной зарплате, иначе 13%) — вычет уменьшает доход сверху вниз
                 по прогрессивной шкале.
               </List.Item>
-              {hasHistory && (
-                <List.Item>
-                  Прошлое до «сегодня» восстановлено по корректировкам трекера: если банк прислал
-                  снимок остатка, он считается авторитетнее расчёта и «затирает» его, а не
-                  корректирует.
-                </List.Item>
-              )}
-              {hasHistory && (
+              {hasFact && (
                 <List.Item>
                   До «сегодня» трекер ведёт только долг, поэтому на графике «Капитал» серая линия
                   в прошлом — это «минус долг», нижняя граница капитала, а не реальные накопления.
@@ -209,7 +236,7 @@ export const MethodologySection = memo(function MethodologySection() {
                     <Table.Tbody>
                       {result.tax.byYear.map((row) => (
                         <Table.Tr key={row.year}>
-                          <Table.Td>{row.year}</Table.Td>
+                          <Table.Td>{row.calendarYear ?? row.year}</Table.Td>
                           <Table.Td>{formatRub(row.propertyReturn)}</Table.Td>
                           <Table.Td>{formatRub(row.amount - row.propertyReturn)}</Table.Td>
                           <Table.Td>{formatRub(row.amount)}</Table.Td>

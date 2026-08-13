@@ -1,5 +1,16 @@
-import { memo, type ReactNode } from 'react'
-import { Paper, Text, Divider, SimpleGrid, Stack, Group, ThemeIcon } from '@mantine/core'
+import { memo, useMemo, type ReactNode } from 'react'
+import {
+  Paper,
+  Text,
+  Divider,
+  SimpleGrid,
+  Stack,
+  Group,
+  ThemeIcon,
+  Accordion,
+  Table,
+  Badge,
+} from '@mantine/core'
 import {
   IconCoin,
   IconShieldCheck,
@@ -10,10 +21,12 @@ import {
   IconAlertTriangle,
   IconArrowDown,
   IconHistory,
+  IconReceipt,
 } from '@tabler/icons-react'
 import { useCalculatorStore } from '../../store/useCalculatorStore'
 import { MetricCard } from '../controls/MetricCard'
 import { formatRub, formatMonths } from '../../lib/formatters'
+import { buildDeductionReport, type DeductionStatus } from '../../lib/reporting'
 
 interface InsightCardProps {
   icon: ReactNode
@@ -45,11 +58,18 @@ function InsightCard({ icon, color, title, children }: InsightCardProps) {
   )
 }
 
+const DEDUCTION_STATUS_LABEL: Record<DeductionStatus, string> = {
+  claimed: 'заявлен',
+  partial: 'заявлен частично',
+  forecast: 'к возврату',
+  noBase: 'нет базы',
+}
+
 export const InsightsSection = memo(function InsightsSection() {
   const params = useCalculatorStore((s) => s.params)
   const result = useCalculatorStore((s) => s.result)
   const effectiveSlipMonth = useCalculatorStore((s) => s.effectiveSlipMonth())
-  const linkedMortgage = useCalculatorStore((s) => s.linkedMortgage)
+  const fact = useCalculatorStore((s) => s.mortgageFact)
 
   const { summary, slip, payoffMonth, safetyMonth, minPayment } = result
   const hasLoan = result.loanAmount > 0
@@ -57,10 +77,14 @@ export const InsightsSection = memo(function InsightsSection() {
   const horizonLabel = `${params.horizonYears} лет`
 
   // Режим ипотеки: все горизонтные величины по-прежнему считаются «от сегодня», абсолютный
-  // месяц ипотеки идёт справочно в скобках (§6 дизайна таймлайна).
-  const history = linkedMortgage?.history
-  const hasHistory = !!history && history.length > 0
-  const todayMonth = hasHistory ? history!.length - 1 : 0
+  // месяц ипотеки идёт справочно в скобках (§2.3 спеки continuous-simulation).
+  const hasFact = fact !== null
+  const todayMonth = hasFact ? fact.elapsedMonths : 0
+
+  const deductionReport = useMemo(
+    () => (params.salary !== null ? buildDeductionReport(result, fact, params) : null),
+    [result, fact, params],
+  )
 
   if (!hasLoan) {
     return null
@@ -69,28 +93,45 @@ export const InsightsSection = memo(function InsightsSection() {
   const advantage = summary.advantageSave
   const advantageAbs = Math.abs(advantage)
 
+  // «Переплата по графику» (§5, §5.1 спеки continuous-simulation): без факта — прежняя формула
+  // (пересчитанный аннуитет нового кредита); с фактом — факт + остаток по текущему графику,
+  // а если текущий платёж не покрывает проценты, переплата по графику не определена вовсе.
+  const overpayLabel = 'Переплата по графику за весь срок'
+  let overpayValue: string
+  let overpayDescription: string
+  if (fact && !fact.paymentCoversInterest) {
+    overpayValue = formatRub(fact.engine.paidInterest)
+    overpayDescription = 'платёж не покрывает проценты — переплата не определена'
+  } else if (fact) {
+    const aheadInterest = Math.max(0, result.totalInterest - fact.engine.paidInterest)
+    overpayValue = formatRub(result.totalInterest)
+    overpayDescription = `уже уплачено ${formatRub(fact.engine.paidInterest)} · впереди ${formatRub(aheadInterest)}`
+  } else {
+    overpayValue = formatRub(result.totalInterest)
+    overpayDescription = 'без досрочки и слёта'
+  }
+
+  const prepaymentsCount = fact ? fact.events.filter((e) => e.kind === 'prepayment').length : 0
+
   return (
     <Paper p="lg" shadow="sm" radius="md">
       <Text fw={600} size="lg">
         Выводы на горизонте {horizonLabel}
-        {hasHistory && ' — считаем от сегодня'}
+        {hasFact && ' — считаем от сегодня'}
       </Text>
       <Divider mb="md" mt="xs" />
 
       {/* Ключевые числа */}
-      <SimpleGrid cols={{ base: 2, sm: 4 }} spacing="md" mb="lg">
+      <SimpleGrid cols={{ base: 2, sm: 4 }} spacing="md" mb="md">
         <MetricCard
           label="Обязательный платёж"
           value={`${formatRub(minPayment)}/мес`}
           color="blue"
-          description="льготный аннуитет"
+          // В режиме ипотеки это фактический платёж по договору (`fact.payment`), а не
+          // рассчитанный льготный аннуитет — ставка могла уже смениться rate-событием.
+          description={hasFact ? 'по договору, факт' : 'льготный аннуитет'}
         />
-        <MetricCard
-          label="Переплата по графику"
-          value={formatRub(result.totalInterest)}
-          color="red"
-          description="без досрочки и слёта"
-        />
+        <MetricCard label={overpayLabel} value={overpayValue} color="red" description={overpayDescription} />
         <MetricCard
           label="Доход от инвестиций"
           value={formatRub(summary.save.investmentIncome)}
@@ -109,8 +150,25 @@ export const InsightsSection = memo(function InsightsSection() {
         />
       </SimpleGrid>
 
+      {/* Уплачено банку с выдачи ипотеки (§3.4, §5 спеки): факт + прогноз; без факта совпадает
+          с прежними totalPaid/totalInterest — карточка честна и для гостя. */}
+      <SimpleGrid cols={{ base: 2, sm: 4 }} spacing="md" mb="lg">
+        <MetricCard
+          label="Уплачено банку с начала ипотеки"
+          value={formatRub(summary.save.totalPaidWithFact)}
+          color="default"
+          description={hasFact ? 'факт + прогноз, с выдачи' : 'за горизонт'}
+        />
+        <MetricCard
+          label="Из них процентов"
+          value={formatRub(summary.save.totalInterestWithFact)}
+          color="default"
+          description={hasFact ? 'факт + прогноз, с выдачи' : 'за горизонт'}
+        />
+      </SimpleGrid>
+
       {result.tax && (
-        <Text size="xs" c="dimmed" mb="lg">
+        <Text size="xs" c="dimmed" mb="sm">
           Доступная база: имущественный {formatRub(result.tax.propertyBaseStart)}
           {result.tax.propertyBaseStart <= 0 && ' (исчерпан — в прогнозе не начисляется)'}, проценты{' '}
           {formatRub(result.tax.interestBaseStart)}
@@ -118,7 +176,67 @@ export const InsightsSection = memo(function InsightsSection() {
         </Text>
       )}
 
+      {/* Таблица вычетов по годам (§6.2 спеки continuous-simulation): прошлые годы — факт
+          с статусом по израсходованной базе, год стыка — «частично факт», будущее — прогноз. */}
+      {deductionReport && deductionReport.rows.length > 0 && (
+        <Accordion variant="separated" mb="lg">
+          <Accordion.Item value="deductions">
+            <Accordion.Control>
+              <Group gap="xs">
+                <ThemeIcon color="orange" variant="light" size="sm">
+                  <IconReceipt size={14} />
+                </ThemeIcon>
+                <Text fw={600} size="sm">
+                  Таблица вычетов по годам
+                </Text>
+              </Group>
+            </Accordion.Control>
+            <Accordion.Panel>
+              <Table striped style={{ fontSize: 12 }}>
+                <Table.Thead>
+                  <Table.Tr>
+                    <Table.Th>Год</Table.Th>
+                    <Table.Th>Проценты за год</Table.Th>
+                    <Table.Th>Что с вычетом</Table.Th>
+                    <Table.Th>Возврат</Table.Th>
+                  </Table.Tr>
+                </Table.Thead>
+                <Table.Tbody>
+                  {deductionReport.rows.map((row) => (
+                    <Table.Tr key={row.year} style={row.kind === 'fact' ? { opacity: 0.65 } : undefined}>
+                      <Table.Td>
+                        {row.year}
+                        {row.kind === 'mixed' && (
+                          <Badge size="xs" ml={6} color="orange" variant="light">
+                            частично факт
+                          </Badge>
+                        )}
+                      </Table.Td>
+                      <Table.Td>{formatRub(row.interestPaid)}</Table.Td>
+                      <Table.Td>{DEDUCTION_STATUS_LABEL[row.status]}</Table.Td>
+                      <Table.Td>{formatRub(row.refund)}</Table.Td>
+                    </Table.Tr>
+                  ))}
+                </Table.Tbody>
+              </Table>
+            </Accordion.Panel>
+          </Accordion.Item>
+        </Accordion>
+      )}
+
       <Stack gap="sm">
+        {fact && !fact.paymentCoversInterest && (
+          <InsightCard
+            icon={<IconAlertTriangle size={18} />}
+            color="red"
+            title="Текущий платёж не покрывает проценты"
+          >
+            Обязательный платёж ({formatRub(fact.engine.payment)}/мес) меньше начисленных процентов —
+            долг по этой ипотеке растёт. Переплата по графику в этом случае не определена: нужен
+            платёж выше или досрочные погашения.
+          </InsightCard>
+        )}
+
         {budgetTooSmall && (
           <InsightCard
             icon={<IconAlertTriangle size={18} />}
@@ -168,7 +286,7 @@ export const InsightsSection = memo(function InsightsSection() {
             ) : payoffMonth !== null ? (
               <>
                 Через <b>{formatMonths(payoffMonth)}</b> (без слёта
-                {hasHistory && `, ${todayMonth + payoffMonth}-й месяц ипотеки`}) накопления
+                {hasFact && `, ${todayMonth + payoffMonth}-й месяц ипотеки`}) накопления
                 сравняются с остатком долга — с этого момента ипотеку можно погасить одним
                 платежом в любой день.
               </>
@@ -207,7 +325,7 @@ export const InsightsSection = memo(function InsightsSection() {
               icon={<IconCoin size={18} />}
               color="red"
               title={
-                hasHistory
+                hasFact
                   ? `Сколько стоит слёт через ${formatMonths(effectiveSlipMonth)} (${todayMonth + effectiveSlipMonth}-й месяц ипотеки)`
                   : `Сколько стоит слёт в месяц ${effectiveSlipMonth}`
               }
@@ -249,7 +367,7 @@ export const InsightsSection = memo(function InsightsSection() {
               color="green"
               title="Когда слёт перестанет быть страшным"
             >
-              {hasHistory ? (
+              {hasFact ? (
                 <>
                   Через <b>{formatMonths(safetyMonth)}</b> ({safetyMonth}-й месяц от сегодня,{' '}
                   {todayMonth + safetyMonth}-й месяц ипотеки) накоплений достаточно, чтобы при
@@ -276,14 +394,29 @@ export const InsightsSection = memo(function InsightsSection() {
             </InsightCard>
           ))}
 
-        {/* Сколько уже пройдено — только в режиме ипотеки с историей (§6 дизайна таймлайна) */}
-        {hasHistory && history && (
-          <InsightCard icon={<IconHistory size={18} />} color="grape" title="Сколько уже пройдено">
-            За {formatMonths(todayMonth)} по этой ипотеке погашено{' '}
-            <b>{formatRub(Math.max(0, history[0] - (history.at(-1) ?? 0)))}</b> тела кредита из{' '}
-            <b>{formatRub(history[0])}</b> и уплачено{' '}
-            <b>{formatRub(linkedMortgage?.paidInterest ?? 0)}</b> процентов. Осталось{' '}
-            <b>{formatRub(history.at(-1) ?? 0)}</b>.
+        {/* Что уже произошло — только в режиме ипотеки с фактом (§5 спеки continuous-simulation) */}
+        {fact && (
+          <InsightCard icon={<IconHistory size={18} />} color="grape" title="Что уже произошло">
+            За {formatMonths(fact.elapsedMonths)} по этой ипотеке внесено банку{' '}
+            <b>{formatRub(fact.history.paidTotal)}</b>: из них{' '}
+            <b>{formatRub(fact.history.paidInterest)}</b> процентов и{' '}
+            <b>{formatRub(fact.history.principalRepaid)}</b> тела.
+            {prepaymentsCount > 0 && (
+              <>
+                {' '}
+                Досрочных погашений — <b>{prepaymentsCount}</b> на{' '}
+                <b>{formatRub(fact.history.paidPrepayments)}</b>.
+              </>
+            )}{' '}
+            Остаток долга <b>{formatRub(fact.engine.debt)}</b> из исходных{' '}
+            <b>{formatRub(fact.principal)}</b>.
+            {Math.abs(fact.history.snapshotDrift) > 1000 && (
+              <>
+                {' '}
+                Остаток по выпискам банка расходится с расчётом на{' '}
+                <b>{formatRub(Math.abs(fact.history.snapshotDrift))}</b> — учтено по выпискам.
+              </>
+            )}
           </InsightCard>
         )}
       </Stack>
