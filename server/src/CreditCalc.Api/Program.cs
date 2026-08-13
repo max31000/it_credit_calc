@@ -34,6 +34,7 @@ builder.Services.AddSingleton<Db>();
 builder.Services.AddScoped<UserRepository>();
 builder.Services.AddScoped<MortgageRepository>();
 builder.Services.AddScoped<MortgageEventRepository>();
+builder.Services.AddScoped<UserSettingsRepository>();
 builder.Services.AddScoped<TelegramAuthService>();
 builder.Services.AddScoped<JwtIssuer>();
 
@@ -122,6 +123,7 @@ if (!app.Environment.IsEnvironment("Testing"))
 
 app.MapAuthEndpoints();
 app.MapMortgageEndpoints();
+app.MapProfileEndpoints();
 
 // Health доступен по двум путям:
 //   /health     — прямая проверка контейнера (docker healthcheck, `curl localhost:8080/health`);

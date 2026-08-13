@@ -1,4 +1,5 @@
 import { useAuthStore } from '../store/useAuthStore'
+import { useCalculatorStore } from '../store/useCalculatorStore'
 
 /**
  * Пусто на GitHub Pages (сборка без VITE_API_BASE) — трекер там полностью скрыт,
@@ -35,7 +36,11 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
   })
 
   if (res.status === 401) {
-    // Токен истёк или невалиден — разлогиниваем и уводим на экран входа
+    // Токен истёк или невалиден — разлогиниваем и уводим на экран входа.
+    // exitMortgageMode() — как в Header.handleLogout (G4): без него баннер режима
+    // ипотеки пережил бы жёсткий редирект (persisted linkedMortgage) и показался бы
+    // разлогиненному гостю или следующему пользователю на этом устройстве.
+    useCalculatorStore.getState().exitMortgageMode()
     useAuthStore.getState().logout()
     window.location.href = `${import.meta.env.BASE_URL ?? '/'}login`
     throw new ApiError('Требуется авторизация', 401)

@@ -7,7 +7,9 @@ import type {
   MortgageEventRequest,
 } from './types'
 
-export const listMortgages = () => apiClient.get<MortgageDto[]>('/mortgages')
+/** §4.2 спеки — список отдаёт ипотеки вместе с их событиями (без этого нет
+ *  верного состояния для карточки списка и режима ипотеки в калькуляторе). */
+export const listMortgages = () => apiClient.get<MortgageDetails[]>('/mortgages')
 
 export const getMortgage = (id: number) => apiClient.get<MortgageDetails>(`/mortgages/${id}`)
 

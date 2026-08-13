@@ -1,6 +1,7 @@
-import { Group, Text, Slider, Stack, NumberInput } from '@mantine/core'
+import { Group, Text, Slider, Stack } from '@mantine/core'
 import type { ReactNode } from 'react'
 import { InfoTooltip } from './InfoTooltip'
+import { NumericInput } from './NumericInput'
 
 interface SliderInputProps {
   label: string
@@ -32,6 +33,7 @@ interface SliderInputProps {
 /**
  * Слайдер с точным числовым вводом. Слайдер задаёт удобный диапазон,
  * поле ввода позволяет ввести точное значение (в т.ч. за пределами слайдера).
+ * Клампинг и защита от «сырых» промежуточных состояний ввода — в `NumericInput` (§7 спеки).
  */
 export function SliderInput({
   label,
@@ -52,14 +54,6 @@ export function SliderInput({
   marks,
   rightHint,
 }: SliderInputProps) {
-  const commitInput = (v: number | string) => {
-    const num = typeof v === 'number' ? v : parseFloat(v)
-    if (isNaN(num)) return
-    const lo = inputMin ?? min
-    const hi = inputMax ?? max
-    onChange(Math.min(hi, Math.max(lo, num)))
-  }
-
   return (
     <Stack gap={4}>
       <Group justify="space-between" align="center" wrap="nowrap">
@@ -71,9 +65,9 @@ export function SliderInput({
         </Group>
         <Group gap={6} align="center" wrap="nowrap">
           {rightHint}
-          <NumberInput
+          <NumericInput
             value={value}
-            onChange={commitInput}
+            onChange={(v) => v !== null && onChange(v)}
             min={inputMin ?? min}
             max={inputMax ?? max}
             step={inputStep ?? step}

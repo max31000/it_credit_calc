@@ -31,3 +31,15 @@ public record AuthUserDto(ulong Id, long TelegramId, string? Username, string? F
 
 /// <summary>Ответ <c>POST /api/auth/telegram</c>.</summary>
 public record AuthResponseDto(string Token, AuthUserDto User);
+
+/// <summary>Шесть настроек аккаунта, хранимых на сервере (spec §4.1). <c>Salary</c> — единственное nullable поле.</summary>
+public record UserSettingsDto(
+    decimal? Salary,
+    decimal DepositRate,
+    decimal FreeMonthly,
+    int HorizonYears,
+    decimal KeyRate,
+    decimal BankDiscount);
+
+/// <summary>Ответ <c>GET/PUT /api/profile/settings</c>. <c>Settings = null</c> — пользователь ещё не сохранял настройки.</summary>
+public record UserSettingsResponse(int Version, UserSettingsDto? Settings, DateTime? UpdatedAt);

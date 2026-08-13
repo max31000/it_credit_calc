@@ -30,6 +30,22 @@ public class MortgageEventRepository
         _db = db;
     }
 
+    /// <summary>
+    /// Все события всех ипотек пользователя одним запросом (spec §4.2/A5) — используется
+    /// в <c>GET /api/mortgages</c>, чтобы список отдавался без N+1: один запрос на ипотеки,
+    /// один на события, группировка в памяти. Порядок — <c>occurred_on ASC, id ASC</c>.
+    /// </summary>
+    public async Task<IReadOnlyList<MortgageEvent>> ListAllByUserAsync(ulong userId)
+    {
+        await using var connection = _db.Create();
+        var rows = await connection.QueryAsync<MortgageEvent>(
+            @"SELECT e.* FROM mortgage_events e
+              JOIN mortgages m ON m.id = e.mortgage_id AND m.user_id = @UserId
+              ORDER BY e.occurred_on ASC, e.id ASC",
+            new { UserId = userId });
+        return rows.ToList();
+    }
+
     /// <summary><c>null</c> — ипотека не найдена/не принадлежит пользователю; иначе список (может быть пустым).</summary>
     public async Task<IReadOnlyList<MortgageEvent>?> ListAsync(ulong userId, ulong mortgageId)
     {

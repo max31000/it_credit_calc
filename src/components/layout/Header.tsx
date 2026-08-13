@@ -3,6 +3,7 @@ import { IconHome } from '@tabler/icons-react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { TRACKER_ENABLED } from '../../api/client'
 import { useAuthStore } from '../../store/useAuthStore'
+import { useCalculatorStore } from '../../store/useCalculatorStore'
 
 export function Header() {
   const location = useLocation()
@@ -10,8 +11,11 @@ export function Header() {
   const user = useAuthStore((s) => s.user)
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated())
   const logout = useAuthStore((s) => s.logout)
+  const exitMortgageMode = useCalculatorStore((s) => s.exitMortgageMode)
 
   const handleLogout = () => {
+    // Смена пользователя не должна показывать следующему чужую ипотеку (G4).
+    exitMortgageMode()
     logout()
     navigate('/')
   }

@@ -1,61 +1,65 @@
 import { memo, useCallback } from 'react'
-import {
-  Paper,
-  Text,
-  Divider,
-  SimpleGrid,
-  Stack,
-  NumberInput,
-  Alert,
-  Group,
-  Box,
-} from '@mantine/core'
+import { Paper, Text, Divider, SimpleGrid, Stack, Alert, Group, Box } from '@mantine/core'
 import { IconAlertTriangle } from '@tabler/icons-react'
 import { useCalculatorStore } from '../../store/useCalculatorStore'
 import { SliderInput } from '../controls/SliderInput'
+import { NumericInput } from '../controls/NumericInput'
 import { InfoTooltip } from '../controls/InfoTooltip'
+import { relinkLoan } from '../../lib/loanLink'
 import { formatRub, formatPct } from '../../lib/formatters'
 
 export const ParamsSection = memo(function ParamsSection() {
   const params = useCalculatorStore((s) => s.params)
   const result = useCalculatorStore((s) => s.result)
   const setParam = useCalculatorStore((s) => s.setParam)
+  const setParams = useCalculatorStore((s) => s.setParams)
 
   const loanAmount = result.loanAmount
   const downPaymentPct = params.apartmentPrice > 0 ? (params.downPayment / params.apartmentPrice) * 100 : 0
   const maxLoan = Math.max(0, Math.round(params.apartmentPrice * 0.9))
   const investMonthly = Math.max(0, params.freeMonthly - result.minPayment)
 
-  // Цена меняется — сохраняем процент взноса
+  // Цена меняется — relinkLoan сохраняет процент взноса (§6 спеки); один setParams — один пересчёт.
   const handleApartmentPrice = useCallback(
     (v: number) => {
-      const pct = params.apartmentPrice > 0 ? params.downPayment / params.apartmentPrice : 0.2
-      setParam('apartmentPrice', v)
-      setParam('downPayment', Math.round(pct * v))
+      const next = relinkLoan(
+        { propertyPrice: params.apartmentPrice, downPayment: params.downPayment, principal: loanAmount },
+        'propertyPrice',
+        v,
+      )
+      setParams({ apartmentPrice: next.propertyPrice, downPayment: next.downPayment })
     },
-    [setParam, params.apartmentPrice, params.downPayment],
+    [setParams, params.apartmentPrice, params.downPayment, loanAmount],
   )
 
   const handleDownPayment = useCallback(
     (v: number) => {
-      setParam('downPayment', Math.round(Math.min(v, params.apartmentPrice)))
+      const next = relinkLoan(
+        { propertyPrice: params.apartmentPrice, downPayment: params.downPayment, principal: loanAmount },
+        'downPayment',
+        v,
+      )
+      setParam('downPayment', next.downPayment)
     },
-    [setParam, params.apartmentPrice],
+    [setParam, params.apartmentPrice, params.downPayment, loanAmount],
   )
 
   // Сумма кредита двигается — меняется взнос (цена фиксирована)
   const handleLoanAmount = useCallback(
     (v: number) => {
-      const loan = Math.min(Math.max(0, v), params.apartmentPrice)
-      setParam('downPayment', Math.round(params.apartmentPrice - loan))
+      const next = relinkLoan(
+        { propertyPrice: params.apartmentPrice, downPayment: params.downPayment, principal: loanAmount },
+        'principal',
+        v,
+      )
+      setParam('downPayment', next.downPayment)
     },
-    [setParam, params.apartmentPrice],
+    [setParam, params.apartmentPrice, params.downPayment, loanAmount],
   )
 
   const handleSalary = useCallback(
-    (v: string | number) => {
-      const num = typeof v === 'string' ? parseFloat(v) : v
-      setParam('salary', !num || num <= 0 ? null : num)
+    (v: number | null) => {
+      setParam('salary', v === null || v <= 0 ? null : v)
     },
     [setParam],
   )
@@ -161,6 +165,7 @@ export const ParamsSection = memo(function ParamsSection() {
             min={5}
             max={30}
             step={1}
+            inputMin={1}
             onChange={(v) => setParam('termYears', v)}
             format={(v) => `${v} лет`}
             suffix=" лет"
@@ -262,9 +267,10 @@ export const ParamsSection = memo(function ParamsSection() {
               </Text>
               <InfoTooltip text="Нужна только для расчёта налоговых вычетов: имущественного (база до 2 млн ₽) и по процентам (база до 3 млн ₽). Возврат ограничен фактически уплаченным НДФЛ по прогрессивной шкале." />
             </Group>
-            <NumberInput
-              value={params.salary ?? 0}
+            <NumericInput
+              value={params.salary}
               onChange={handleSalary}
+              allowEmpty
               min={0}
               max={10_000_000}
               step={10_000}

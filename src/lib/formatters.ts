@@ -20,3 +20,9 @@ export const formatYearMonth = (ym: string): string => {
   const [y, m] = ym.split('-')
   return `${m}.${y}`
 }
+
+/** 'YYYY-MM-DD' → 'DD.MM.YYYY' (для отображения asOf в баннере режима ипотеки) */
+export const formatDate = (ymd: string): string => {
+  const [y, m, d] = ymd.split('-')
+  return `${d}.${m}.${y}`
+}

@@ -59,6 +59,23 @@ export interface MortgageEventRequest {
   note: string | null
 }
 
+/** Шесть полей, живущих в аккаунте (С3 спеки), а не в конкретном сценарии калькулятора */
+export interface AccountSettings {
+  salary: number | null
+  depositRate: number
+  freeMonthly: number
+  horizonYears: number
+  keyRate: number
+  bankDiscount: number
+}
+
+/** Ответ GET/PUT /api/profile/settings. settings === null — пользователь ещё не сохранял. */
+export interface UserSettingsResponse {
+  version: number
+  settings: AccountSettings | null
+  updatedAt: string | null // ISO-8601 UTC
+}
+
 export interface AuthUser {
   id: number
   telegramId: number

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { Alert, Button, Group, Loader, Modal, Paper, Stack, Text } from '@mantine/core'
-import { IconAlertTriangle, IconPlus } from '@tabler/icons-react'
+import { Alert, Button, Group, Loader, Modal, Paper, Stack, Text, Tooltip } from '@mantine/core'
+import { IconAlertTriangle, IconChartLine, IconPlus } from '@tabler/icons-react'
 import { notifications } from '@mantine/notifications'
 import {
   getMortgage,
@@ -12,6 +12,8 @@ import {
 } from '../api/mortgages'
 import type { MortgageDetails, MortgageEventRequest, MortgageRequest } from '../api/types'
 import { computeMortgageState } from '../lib/tracker'
+import { mortgageToParams, accountSettingsFromParams } from '../lib/mortgageToParams'
+import { useCalculatorStore } from '../store/useCalculatorStore'
 import { MortgageStatus } from '../components/tracker/MortgageStatus'
 import { MortgageForm } from '../components/tracker/MortgageForm'
 import { EventForm } from '../components/tracker/EventForm'
@@ -21,6 +23,7 @@ export default function MortgagePage() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
   const mortgageId = Number(id)
+  const enterMortgageMode = useCalculatorStore((s) => s.enterMortgageMode)
 
   const [details, setDetails] = useState<MortgageDetails | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -127,6 +130,29 @@ export default function MortgagePage() {
 
   const { mortgage, events } = details
   const state = computeMortgageState(mortgage, events, new Date())
+  const mortgageClosed = state.currentBalance === 0
+
+  const handleOpenInCalculator = () => {
+    const settings = accountSettingsFromParams(useCalculatorStore.getState().ownParams)
+    const { params, state: mState, termFallback } = mortgageToParams({
+      mortgage,
+      events,
+      settings,
+      today: new Date(),
+    })
+    enterMortgageMode(
+      {
+        id: mortgage.id,
+        title: mortgage.title,
+        asOf: mState.asOf,
+        balance: mState.currentBalance,
+        payment: mState.currentPayment,
+        termFallback,
+      },
+      params,
+    )
+    navigate('/')
+  }
 
   return (
     <Stack gap="lg">
@@ -142,6 +168,18 @@ export default function MortgagePage() {
           )}
         </Stack>
         <Group>
+          <Tooltip label="Ипотека погашена — считать нечего" disabled={!mortgageClosed}>
+            {/* Не используем нативный disabled — иначе Tooltip не поймает наведение мышью */}
+            <Button
+              variant="light"
+              leftSection={<IconChartLine size={16} />}
+              onClick={mortgageClosed ? undefined : handleOpenInCalculator}
+              aria-disabled={mortgageClosed}
+              style={mortgageClosed ? { opacity: 0.5, cursor: 'not-allowed' } : undefined}
+            >
+              Открыть в калькуляторе
+            </Button>
+          </Tooltip>
           <Button variant="default" onClick={() => setEditOpen(true)}>
             Редактировать
           </Button>

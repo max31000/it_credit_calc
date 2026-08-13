@@ -26,11 +26,24 @@ public static class MortgageEndpoints
         group.MapDelete("/{id}/events/{eventId}", DeleteEvent);
     }
 
-    private static async Task<IResult> ListMortgages(ClaimsPrincipal principal, MortgageRepository repo)
+    /// <summary>
+    /// Отдаёт ипотеки вместе с событиями (spec §4.2, ломающее изменение контракта) —
+    /// два запроса вместо N+1: один за ипотеками, один за всеми событиями пользователя,
+    /// группировка <c>ToLookup</c> в памяти. Порядок ипотек прежний, событий — occurred_on ASC, id ASC.
+    /// </summary>
+    private static async Task<IResult> ListMortgages(
+        ClaimsPrincipal principal, MortgageRepository mortgageRepo, MortgageEventRepository eventRepo)
     {
         var userId = RequireUserId(principal);
-        var mortgages = await repo.ListAsync(userId);
-        return Results.Ok(mortgages.Select(ToDto));
+
+        var mortgages = await mortgageRepo.ListAsync(userId);
+        var events = await eventRepo.ListAllByUserAsync(userId);
+        var eventsByMortgage = events.ToLookup(e => e.MortgageId);
+
+        var result = mortgages.Select(m =>
+            new MortgageDetailsDto(ToDto(m), eventsByMortgage[m.Id].Select(ToDto).ToList()));
+
+        return Results.Ok(result);
     }
 
     private static async Task<IResult> CreateMortgage(ClaimsPrincipal principal, MortgageRequest request, MortgageRepository repo)

@@ -95,3 +95,37 @@ public record MortgageEventRequest(
         return null;
     }
 }
+
+/// <summary>Тело <c>PUT /api/profile/settings</c>. Правила валидации — таблица §4.1 спеки, дословно.</summary>
+public record UserSettingsRequest(int Version, UserSettingsDto? Settings)
+{
+    /// <summary>Возвращает текст ошибки на русском или <c>null</c>, если запрос валиден.</summary>
+    public string? Validate()
+    {
+        if (Version != 1)
+            return "Неподдерживаемая версия настроек";
+
+        if (Settings is null)
+            return "Настройки обязательны";
+
+        if (Settings.Salary is < 0 or > 10_000_000)
+            return "Зарплата должна быть от 0 до 10 000 000";
+
+        if (Settings.DepositRate < 0 || Settings.DepositRate > 100)
+            return "Доходность должна быть от 0 до 100 процентов";
+
+        if (Settings.FreeMonthly < 0 || Settings.FreeMonthly > 50_000_000)
+            return "Бюджет должен быть от 0 до 50 000 000";
+
+        if (Settings.HorizonYears is < 1 or > 30)
+            return "Горизонт должен быть от 1 до 30 лет";
+
+        if (Settings.KeyRate < 0 || Settings.KeyRate > 100)
+            return "Ключевая ставка должна быть от 0 до 100 процентов";
+
+        if (Settings.BankDiscount < -10 || Settings.BankDiscount > 10)
+            return "Дисконт банка должен быть от -10 до 10";
+
+        return null;
+    }
+}

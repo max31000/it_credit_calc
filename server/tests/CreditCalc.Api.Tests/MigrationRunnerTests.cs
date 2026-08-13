@@ -1,3 +1,4 @@
+using System.Reflection;
 using CreditCalc.Api.Data;
 using FluentAssertions;
 
@@ -66,5 +67,21 @@ public class MigrationRunnerTests
         var statements = MigrationRunner.SplitSqlStatements(sql);
 
         statements.Should().ContainSingle().Which.Trim().Should().Be("DELETE FROM foo");
+    }
+
+    [Fact]
+    public void UserSettingsMigration_SplitsIntoExactlyOneStatement()
+    {
+        var assembly = Assembly.GetAssembly(typeof(MigrationRunner))!;
+        var resourceName = assembly.GetManifestResourceNames()
+            .Single(n => n.EndsWith("002_user_settings.sql"));
+
+        using var stream = assembly.GetManifestResourceStream(resourceName)!;
+        using var reader = new StreamReader(stream);
+        var sql = reader.ReadToEnd();
+
+        var statements = MigrationRunner.SplitSqlStatements(sql);
+
+        statements.Should().ContainSingle();
     }
 }

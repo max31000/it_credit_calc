@@ -1,5 +1,6 @@
 import { useState } from 'react'
-import { Button, Group, NumberInput, Select, Stack, Text, Textarea, TextInput } from '@mantine/core'
+import { Button, Group, Select, Stack, Text, Textarea, TextInput } from '@mantine/core'
+import { NumericInput } from '../controls/NumericInput'
 import type { MortgageEventKind, MortgageEventRequest } from '../../api/types'
 
 const KIND_OPTIONS: Array<{ value: MortgageEventKind; label: string }> = [
@@ -25,8 +26,8 @@ interface EventFormProps {
 export function EventForm({ mortgageStartedOn, submitting, onSubmit, onCancel }: EventFormProps) {
   const [kind, setKind] = useState<MortgageEventKind>('balance')
   const [occurredOn, setOccurredOn] = useState('')
-  const [amount, setAmount] = useState<number | ''>('')
-  const [rate, setRate] = useState<number | ''>('')
+  const [amount, setAmount] = useState<number | null>(null)
+  const [rate, setRate] = useState<number | null>(null)
   const [note, setNote] = useState('')
   const [error, setError] = useState<string | null>(null)
 
@@ -37,8 +38,8 @@ export function EventForm({ mortgageStartedOn, submitting, onSubmit, onCancel }:
     if (!occurredOn) return 'Укажите дату'
     if (occurredOn < mortgageStartedOn) return 'Дата не может быть раньше даты оформления ипотеки'
     if (occurredOn > todayPlusYear()) return 'Дата не может быть дальше года вперёд'
-    if (needsAmount && (amount === '' || Number(amount) <= 0)) return 'Укажите сумму больше нуля'
-    if (needsRate && (rate === '' || Number(rate) <= 0 || Number(rate) > 100))
+    if (needsAmount && (amount === null || amount <= 0)) return 'Укажите сумму больше нуля'
+    if (needsRate && (rate === null || rate <= 0 || rate > 100))
       return 'Ставка должна быть в диапазоне от 0 до 100%'
     if (note.length > 500) return 'Комментарий длиннее 500 символов'
     return null
@@ -54,8 +55,8 @@ export function EventForm({ mortgageStartedOn, submitting, onSubmit, onCancel }:
     onSubmit({
       kind,
       occurredOn,
-      amount: needsAmount ? Number(amount) : null,
-      rate: needsRate ? Number(rate) : null,
+      amount: needsAmount ? amount : null,
+      rate: needsRate ? rate : null,
       note: note.trim() ? note.trim() : null,
     })
   }
@@ -77,20 +78,22 @@ export function EventForm({ mortgageStartedOn, submitting, onSubmit, onCancel }:
         required
       />
       {needsAmount && (
-        <NumberInput
+        <NumericInput
           label="Сумма, ₽"
           value={amount}
-          onChange={(v) => setAmount(typeof v === 'number' ? v : '')}
+          onChange={setAmount}
+          allowEmpty
           min={0}
           thousandSeparator=" "
           suffix=" ₽"
         />
       )}
       {needsRate && (
-        <NumberInput
+        <NumericInput
           label="Новая ставка, % годовых"
           value={rate}
-          onChange={(v) => setRate(typeof v === 'number' ? v : '')}
+          onChange={setRate}
+          allowEmpty
           min={0}
           max={100}
           step={0.1}

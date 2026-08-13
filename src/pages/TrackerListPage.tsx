@@ -4,14 +4,14 @@ import { Alert, Button, Group, Loader, Modal, Paper, SimpleGrid, Stack, Text } f
 import { IconAlertTriangle, IconPlus } from '@tabler/icons-react'
 import { notifications } from '@mantine/notifications'
 import { listMortgages, createMortgage } from '../api/mortgages'
-import type { MortgageDto, MortgageRequest } from '../api/types'
+import type { MortgageDetails, MortgageRequest } from '../api/types'
 import { MortgageCard } from '../components/tracker/MortgageCard'
 import { MortgageForm } from '../components/tracker/MortgageForm'
 
 export default function TrackerListPage() {
   const location = useLocation()
   const navigate = useNavigate()
-  const [mortgages, setMortgages] = useState<MortgageDto[] | null>(null)
+  const [mortgages, setMortgages] = useState<MortgageDetails[] | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [createOpen, setCreateOpen] = useState(false)
   const [submitting, setSubmitting] = useState(false)
@@ -90,8 +90,8 @@ export default function TrackerListPage() {
 
       {!error && mortgages !== null && mortgages.length > 0 && (
         <SimpleGrid cols={{ base: 1, sm: 2, lg: 3 }} spacing="md">
-          {mortgages.map((m) => (
-            <MortgageCard key={m.id} mortgage={m} />
+          {mortgages.map((d) => (
+            <MortgageCard key={d.mortgage.id} mortgage={d.mortgage} events={d.events} />
           ))}
         </SimpleGrid>
       )}
