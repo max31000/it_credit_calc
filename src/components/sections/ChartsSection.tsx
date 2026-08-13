@@ -1,5 +1,5 @@
-import { memo, useMemo } from 'react'
-import { Paper, Text, Tabs, Box, Stack } from '@mantine/core'
+import { memo, useMemo, useState } from 'react'
+import { Paper, Text, Tabs, Box, Stack, Group, SegmentedControl } from '@mantine/core'
 import {
   LineChart,
   Line,
@@ -16,6 +16,9 @@ import { useCalculatorStore } from '../../store/useCalculatorStore'
 import { CHART_COLORS, formatYAxis, useChartTheme, xTickFormatter } from '../charts/chartUtils'
 import { ChartTooltip } from '../charts/ChartTooltip'
 import { formatRub } from '../../lib/formatters'
+import { buildTimeline, toAbsolute, sliceFromToday, type Timeline, type TimelinePoint } from '../../lib/timeline'
+
+type TimelineDisplayMode = 'full' | 'forecast'
 
 /** Общие пропсы осей и сетки */
 function ChartFrame({
@@ -24,7 +27,7 @@ function ChartFrame({
   height = 300,
 }: {
   children: React.ReactNode
-  data: Array<Record<string, number>>
+  data: Array<Record<string, number | null>>
   height?: number
 }) {
   const { gridColor, tickColor } = useChartTheme()
@@ -42,18 +45,36 @@ function ChartFrame({
   )
 }
 
-function NetWorthTab() {
+/** Вертикаль «Сегодня» — общая для всех трёх вкладок при наличии истории (§5.2 дизайна) */
+function TodayReferenceLine({ month }: { month: number }) {
+  return (
+    <ReferenceLine
+      x={month}
+      stroke={CHART_COLORS.neutral}
+      strokeWidth={2}
+      label={{ value: 'Сегодня', fill: CHART_COLORS.neutral, fontSize: 11, position: 'top' }}
+    />
+  )
+}
+
+interface TimelineTabProps {
+  points: TimelinePoint[]
+  timeline: Timeline
+}
+
+function NetWorthTab({ points, timeline }: TimelineTabProps) {
   const result = useCalculatorStore((s) => s.result)
   const effectiveSlipMonth = useCalculatorStore((s) => s.effectiveSlipMonth())
 
   const data = useMemo(
     () =>
-      result.series.map((pt) => ({
+      points.map((pt) => ({
         month: pt.month,
         netWorthPrepay: pt.netWorthPrepay,
         netWorthSave: pt.netWorthSave,
+        netWorthFact: pt.netWorthFact,
       })),
-    [result.series],
+    [points],
   )
 
   const showSlip = result.slip !== null && effectiveSlipMonth > 0
@@ -63,18 +84,40 @@ function NetWorthTab() {
       <Text size="xs" c="dimmed">
         Капитал = накопления − остаток долга. Чем выше линия, тем ближе вы к жизни без ипотеки.
         {showSlip && ' Излом на линиях — момент слёта.'}
+        {timeline.hasHistory &&
+          ' До сегодня трекер знает только долг, поэтому серая линия — нижняя граница капитала. Ступенька на «Сегодня» — ваши текущие накопления.'}
       </Text>
       <ChartFrame data={data}>
-        <Tooltip content={<ChartTooltip />} />
+        <Tooltip
+          content={
+            <ChartTooltip
+              todayMonth={timeline.hasHistory ? timeline.todayMonth : undefined}
+              startedOn={timeline.startedOn}
+            />
+          }
+        />
         <Legend />
         <ReferenceLine y={0} stroke={CHART_COLORS.neutral} strokeDasharray="4 4" strokeWidth={1} />
+        {timeline.hasHistory && <TodayReferenceLine month={timeline.todayMonth} />}
         {showSlip && (
           <ReferenceLine
-            x={effectiveSlipMonth}
+            x={toAbsolute(timeline, effectiveSlipMonth)}
             stroke={CHART_COLORS.slip}
             strokeDasharray="6 3"
             strokeWidth={2}
             label={{ value: 'Слёт', fill: CHART_COLORS.slip, fontSize: 11, position: 'top' }}
+          />
+        )}
+        {timeline.hasHistory && (
+          <Line
+            type="monotone"
+            dataKey="netWorthFact"
+            stroke={CHART_COLORS.neutral}
+            strokeWidth={1.5}
+            strokeDasharray="4 4"
+            dot={false}
+            name="Капитал без учёта накоплений (факт)"
+            isAnimationActive={false}
           />
         )}
         <Line
@@ -100,22 +143,26 @@ function NetWorthTab() {
   )
 }
 
-function BalancesTab() {
+function BalancesTab({ points, timeline }: TimelineTabProps) {
   const result = useCalculatorStore((s) => s.result)
   const effectiveSlipMonth = useCalculatorStore((s) => s.effectiveSlipMonth())
 
   const data = useMemo(
     () =>
-      result.series.map((pt) => ({
+      points.map((pt) => ({
         month: pt.month,
         debtSave: pt.debtSave,
         savingsSave: pt.savingsSave,
         debtPrepay: pt.debtPrepay,
+        debtFact: pt.debtFact,
       })),
-    [result.series],
+    [points],
   )
 
   const showSlip = result.slip !== null && effectiveSlipMonth > 0
+  // payoffMonth === 0 совпал бы с вертикалью «Сегодня» — линию не рисуем, об этом говорит
+  // карточка выводов (§5.3 дизайна).
+  const showPayoff = result.payoffMonth !== null && result.payoffMonth !== 0 && !showSlip
 
   return (
     <Stack gap="xs">
@@ -123,20 +170,28 @@ function BalancesTab() {
         Точка, где накопления пересекают долг, — момент, когда ипотеку можно закрыть целиком.
       </Text>
       <ChartFrame data={data}>
-        <Tooltip content={<ChartTooltip />} />
+        <Tooltip
+          content={
+            <ChartTooltip
+              todayMonth={timeline.hasHistory ? timeline.todayMonth : undefined}
+              startedOn={timeline.startedOn}
+            />
+          }
+        />
         <Legend />
+        {timeline.hasHistory && <TodayReferenceLine month={timeline.todayMonth} />}
         {showSlip && (
           <ReferenceLine
-            x={effectiveSlipMonth}
+            x={toAbsolute(timeline, effectiveSlipMonth)}
             stroke={CHART_COLORS.slip}
             strokeDasharray="6 3"
             strokeWidth={2}
             label={{ value: 'Слёт', fill: CHART_COLORS.slip, fontSize: 11, position: 'top' }}
           />
         )}
-        {result.payoffMonth !== null && !showSlip && (
+        {showPayoff && (
           <ReferenceLine
-            x={result.payoffMonth}
+            x={toAbsolute(timeline, result.payoffMonth as number)}
             stroke={CHART_COLORS.payoff}
             strokeDasharray="6 3"
             strokeWidth={2}
@@ -146,6 +201,17 @@ function BalancesTab() {
               fontSize: 11,
               position: 'top',
             }}
+          />
+        )}
+        {timeline.hasHistory && (
+          <Line
+            type="monotone"
+            dataKey="debtFact"
+            stroke={CHART_COLORS.neutral}
+            strokeWidth={2.5}
+            dot={false}
+            name="Долг (факт)"
+            isAnimationActive={false}
           />
         )}
         <Line
@@ -182,25 +248,29 @@ function BalancesTab() {
   )
 }
 
-function SlipRiskTab() {
+function SlipRiskTab({ timeline }: { timeline: Timeline }) {
   const result = useCalculatorStore((s) => s.result)
   const effectiveSlipMonth = useCalculatorStore((s) => s.effectiveSlipMonth())
 
   const data = useMemo(
     () =>
-      result.slipAnalysis.map((pt) => ({
-        month: pt.slipMonth,
+      timeline.slipPoints.map((pt) => ({
+        month: pt.month,
         paymentWithoutPrepay: pt.paymentWithoutPrepay,
         paymentWithPrepay: pt.paymentWithPrepay,
       })),
-    [result.slipAnalysis],
+    [timeline.slipPoints],
   )
+
+  const axisCaption = timeline.hasHistory
+    ? 'Ось X — момент возможного слёта в месяцах от выдачи ипотеки.'
+    : 'Ось X — момент возможного слёта, а не время.'
 
   return (
     <Stack gap="xs">
       <Text size="xs" c="dimmed">
-        Ось X — момент возможного слёта, а не время. Для каждого месяца показан платёж, который
-        возник бы при слёте именно в этот месяц: с внесением всех накоплений в долг и без него.
+        {axisCaption} Для каждого месяца показан платёж, который возник бы при слёте именно в
+        этот месяц: с внесением всех накоплений в долг и без него.
       </Text>
       <ChartFrame data={data}>
         <Tooltip
@@ -208,10 +278,19 @@ function SlipRiskTab() {
             <ChartTooltip
               labelPrefix="Если слёт в мес."
               footer={`Льготный платёж: ${formatRub(result.minPayment)}`}
+              todayMonth={timeline.hasHistory ? timeline.todayMonth : undefined}
+              startedOn={timeline.startedOn}
             />
           }
         />
         <Legend />
+        {/* Вертикаль «Сегодня» здесь оставлена для единообразия с двумя другими вкладками,
+            но осознанно не появляется на экране: ось X этой вкладки — не время, а месяц
+            возможного слёта, и `timeline.slipPoints` начинается с `todayMonth + 1` (слёт
+            «в этом месяце» — уже следующий месяц, см. §3.3 дизайна). Координата todayMonth
+            лежит за пределами категорий данных графика, поэтому recharts молча не рисует
+            ReferenceLine на такой x — это не баг, чинить пересчётом домена не нужно. */}
+        {timeline.hasHistory && <TodayReferenceLine month={timeline.todayMonth} />}
         <ReferenceLine
           y={result.minPayment}
           stroke={CHART_COLORS.payoff}
@@ -225,7 +304,7 @@ function SlipRiskTab() {
         />
         {result.safetyMonth !== null && (
           <ReferenceLine
-            x={result.safetyMonth}
+            x={toAbsolute(timeline, result.safetyMonth)}
             stroke={CHART_COLORS.safety}
             strokeWidth={2}
             label={{
@@ -236,9 +315,9 @@ function SlipRiskTab() {
             }}
           />
         )}
-        {effectiveSlipMonth > 0 && effectiveSlipMonth <= data.length && (
+        {effectiveSlipMonth > 0 && effectiveSlipMonth <= result.slipAnalysis.length && (
           <ReferenceLine
-            x={effectiveSlipMonth}
+            x={toAbsolute(timeline, effectiveSlipMonth)}
             stroke={CHART_COLORS.neutral}
             strokeDasharray="6 3"
             label={{
@@ -273,32 +352,61 @@ function SlipRiskTab() {
 }
 
 export const ChartsSection = memo(function ChartsSection() {
-  const loanAmount = useCalculatorStore((s) => s.result.loanAmount)
-  if (loanAmount === 0) return null
+  const result = useCalculatorStore((s) => s.result)
+  const linkedMortgage = useCalculatorStore((s) => s.linkedMortgage)
+  const [timelineMode, setTimelineMode] = useState<TimelineDisplayMode>('full')
+
+  // Единый пересчёт «история + прогноз» на весь блок графиков (§5.1 дизайна) — раздаётся
+  // во вкладки пропсами вместо трёх отдельных useMemo, как было раньше.
+  const timeline = useMemo(
+    () => buildTimeline(result, linkedMortgage?.history ?? null, linkedMortgage?.startedOn ?? null),
+    [result, linkedMortgage?.history, linkedMortgage?.startedOn],
+  )
+
+  const points = useMemo(
+    () => (timelineMode === 'forecast' ? sliceFromToday(timeline) : timeline.points),
+    [timeline, timelineMode],
+  )
+
+  if (result.loanAmount === 0) return null
 
   return (
     <Paper p="lg" shadow="sm" radius="md">
       <Tabs defaultValue="networth" keepMounted={false}>
-        <Tabs.List mb="md">
-          <Tabs.Tab value="networth" leftSection={<IconChartLine size={16} />}>
-            Капитал
-          </Tabs.Tab>
-          <Tabs.Tab value="balances" leftSection={<IconWallet size={16} />}>
-            Долг и накопления
-          </Tabs.Tab>
-          <Tabs.Tab value="sliprisk" leftSection={<IconAlertTriangle size={16} />}>
-            Риск слёта
-          </Tabs.Tab>
-        </Tabs.List>
+        <Group justify="space-between" mb="md" wrap="wrap" gap="sm">
+          <Tabs.List>
+            <Tabs.Tab value="networth" leftSection={<IconChartLine size={16} />}>
+              Капитал
+            </Tabs.Tab>
+            <Tabs.Tab value="balances" leftSection={<IconWallet size={16} />}>
+              Долг и накопления
+            </Tabs.Tab>
+            <Tabs.Tab value="sliprisk" leftSection={<IconAlertTriangle size={16} />}>
+              Риск слёта
+            </Tabs.Tab>
+          </Tabs.List>
+
+          {timeline.hasHistory && (
+            <SegmentedControl
+              size="xs"
+              value={timelineMode}
+              onChange={(v) => setTimelineMode(v as TimelineDisplayMode)}
+              data={[
+                { value: 'full', label: 'Весь срок' },
+                { value: 'forecast', label: 'От сегодня' },
+              ]}
+            />
+          )}
+        </Group>
 
         <Tabs.Panel value="networth">
-          <NetWorthTab />
+          <NetWorthTab points={points} timeline={timeline} />
         </Tabs.Panel>
         <Tabs.Panel value="balances">
-          <BalancesTab />
+          <BalancesTab points={points} timeline={timeline} />
         </Tabs.Panel>
         <Tabs.Panel value="sliprisk">
-          <SlipRiskTab />
+          <SlipRiskTab timeline={timeline} />
         </Tabs.Panel>
       </Tabs>
     </Paper>

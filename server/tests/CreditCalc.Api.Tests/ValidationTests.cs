@@ -4,8 +4,9 @@ using FluentAssertions;
 namespace CreditCalc.Api.Tests;
 
 /// <summary>
-/// По одному кейсу на каждое правило валидации из spec §3.2 (<see cref="MortgageRequest.Validate"/>,
-/// <see cref="MortgageEventRequest.Validate"/>), плюс happy-path на валидные запросы.
+/// По одному кейсу на каждое правило валидации из spec §3.2 tracker-design
+/// (<see cref="MortgageRequest.Validate"/>, <see cref="MortgageEventRequest.Validate"/>)
+/// и §7.2 mortgage-timeline-design (вычеты), плюс happy-path на валидные запросы.
 /// </summary>
 public class ValidationTests
 {
@@ -20,7 +21,9 @@ public class ValidationTests
         Rate: 6m,
         TermMonths: 240,
         StartedOn: Today.AddDays(-30),
-        MonthlyPayment: 39_620.5m);
+        MonthlyPayment: 39_620.5m,
+        UsedPropertyBase: 0m,
+        UsedInterestBase: 0m);
 
     [Fact]
     public void MortgageRequest_Valid_ReturnsNull()
@@ -122,6 +125,57 @@ public class ValidationTests
     public void MortgageRequest_MonthlyPaymentNull_IsValid()
     {
         (ValidMortgage() with { MonthlyPayment = null }).Validate().Should().BeNull();
+    }
+
+    // ─── Вычеты (spec §7.2 mortgage-timeline-design) ────────────────────────
+
+    [Fact]
+    public void MortgageRequest_UsedPropertyBaseNegative_ReturnsError()
+    {
+        (ValidMortgage() with { UsedPropertyBase = -1 }).Validate()
+            .Should().Be("Использованная база имущественного вычета не может быть отрицательной");
+    }
+
+    [Fact]
+    public void MortgageRequest_UsedPropertyBaseOverTwoMillion_ReturnsError()
+    {
+        // PropertyPrice = 7М в ValidMortgage(), лимит 2М меньше цены → упор в 2М
+        (ValidMortgage() with { UsedPropertyBase = 2_000_001m }).Validate()
+            .Should().Be("Использованная база имущественного вычета не может превышать 2 000 000 и стоимость недвижимости");
+    }
+
+    [Fact]
+    public void MortgageRequest_UsedPropertyBaseOverCheapPropertyPrice_ReturnsError()
+    {
+        // Цена 1.5М < лимита 2М → упор в цену недвижимости, а не в лимит
+        (ValidMortgage() with { PropertyPrice = 1_500_000m, DownPayment = 300_000m, Principal = 1_200_000m, UsedPropertyBase = 1_500_001m })
+            .Validate().Should().Be("Использованная база имущественного вычета не может превышать 2 000 000 и стоимость недвижимости");
+    }
+
+    [Fact]
+    public void MortgageRequest_UsedPropertyBaseAtLimit_IsValid()
+    {
+        (ValidMortgage() with { UsedPropertyBase = 2_000_000m }).Validate().Should().BeNull();
+    }
+
+    [Fact]
+    public void MortgageRequest_UsedInterestBaseOverLimit_ReturnsError()
+    {
+        (ValidMortgage() with { UsedInterestBase = 3_000_001m }).Validate()
+            .Should().Be("Использованная база вычета по процентам должна быть от 0 до 3 000 000");
+    }
+
+    [Fact]
+    public void MortgageRequest_UsedInterestBaseNegative_ReturnsError()
+    {
+        (ValidMortgage() with { UsedInterestBase = -1 }).Validate()
+            .Should().Be("Использованная база вычета по процентам должна быть от 0 до 3 000 000");
+    }
+
+    [Fact]
+    public void MortgageRequest_UsedInterestBaseAtLimit_IsValid()
+    {
+        (ValidMortgage() with { UsedInterestBase = 3_000_000m }).Validate().Should().BeNull();
     }
 
     // ─── MortgageEventRequest ──────────────────────────────────────────────

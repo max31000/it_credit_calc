@@ -11,9 +11,9 @@ import {
   deleteEvent,
 } from '../api/mortgages'
 import type { MortgageDetails, MortgageEventRequest, MortgageRequest } from '../api/types'
-import { computeMortgageState } from '../lib/tracker'
+import { computeMortgageState, buildDebtHistory } from '../lib/tracker'
 import { mortgageToParams, accountSettingsFromParams } from '../lib/mortgageToParams'
-import { useCalculatorStore } from '../store/useCalculatorStore'
+import { useCalculatorStore, linkFromMortgage } from '../store/useCalculatorStore'
 import { MortgageStatus } from '../components/tracker/MortgageStatus'
 import { MortgageForm } from '../components/tracker/MortgageForm'
 import { EventForm } from '../components/tracker/EventForm'
@@ -131,26 +131,14 @@ export default function MortgagePage() {
   const { mortgage, events } = details
   const state = computeMortgageState(mortgage, events, new Date())
   const mortgageClosed = state.currentBalance === 0
+  // Помощник «по какой год получен вычет по процентам» (§1.5, §8 дизайна таймлайна) —
+  // считается из той же реконструкции истории, что и таймлайн графиков.
+  const history = buildDebtHistory(mortgage, events, new Date())
 
   const handleOpenInCalculator = () => {
     const settings = accountSettingsFromParams(useCalculatorStore.getState().ownParams)
-    const { params, state: mState, termFallback } = mortgageToParams({
-      mortgage,
-      events,
-      settings,
-      today: new Date(),
-    })
-    enterMortgageMode(
-      {
-        id: mortgage.id,
-        title: mortgage.title,
-        asOf: mState.asOf,
-        balance: mState.currentBalance,
-        payment: mState.currentPayment,
-        termFallback,
-      },
-      params,
-    )
+    const mapped = mortgageToParams({ mortgage, events, settings, today: new Date() })
+    enterMortgageMode(linkFromMortgage(mortgage, mapped), mapped.params)
     navigate('/')
   }
 
@@ -209,6 +197,7 @@ export default function MortgagePage() {
           submitting={submitting}
           onSubmit={handleEdit}
           onCancel={() => setEditOpen(false)}
+          deductionHelp={{ interestByYear: history.interestByYear, paidInterest: history.paidInterest }}
         />
       </Modal>
 

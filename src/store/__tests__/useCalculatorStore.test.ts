@@ -1,6 +1,8 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { useCalculatorStore, type LinkedMortgage } from '../useCalculatorStore'
+import { useCalculatorStore, linkFromMortgage, type LinkedMortgage } from '../useCalculatorStore'
 import type { MortgageParams } from '../../lib/engine'
+import type { MortgageModeParams } from '../../lib/mortgageToParams'
+import type { MortgageDto } from '../../api/types'
 
 // Снимок дефолтных параметров, снятый при загрузке модуля (до мутаций тестами) —
 // используется для полного сброса стора между тестами (иначе тесты режима ипотеки
@@ -129,13 +131,89 @@ describe('useCalculatorStore — режим ипотеки (§3.1 спеки)', 
       horizonYears: 12,
       keyRate: 17,
       bankDiscount: 1,
+      startingSavings: 900_000,
     })
 
     const state = useCalculatorStore.getState()
     expect(state.params.salary).toBe(400_000)
     expect(state.ownParams.salary).toBe(400_000)
     expect(state.ownParams.depositRate).toBe(18)
+    expect(state.ownParams.startingSavings).toBe(900_000)
     expect(state.params.apartmentPrice).toBe(ownBefore.apartmentPrice)
+  })
+
+  it('правка startingSavings (ключ аккаунта) в режиме ипотеки уходит и в ownParams', () => {
+    const store = useCalculatorStore.getState()
+    store.enterMortgageMode(link(), store.ownParams)
+
+    useCalculatorStore.getState().setParam('startingSavings', 1_500_000)
+
+    const state = useCalculatorStore.getState()
+    expect(state.params.startingSavings).toBe(1_500_000)
+    expect(state.ownParams.startingSavings).toBe(1_500_000)
+  })
+
+  it('правка usedInterestBase (сценарный ключ) в режиме ипотеки не уходит в ownParams', () => {
+    const store = useCalculatorStore.getState()
+    const ownBefore = store.ownParams
+    store.enterMortgageMode(link(), store.ownParams)
+
+    useCalculatorStore.getState().setParam('usedInterestBase', 500_000)
+
+    const state = useCalculatorStore.getState()
+    expect(state.params.usedInterestBase).toBe(500_000)
+    expect(state.ownParams.usedInterestBase).toBe(ownBefore.usedInterestBase)
+  })
+})
+
+describe('useCalculatorStore — linkFromMortgage (§2.6 дизайна таймлайна)', () => {
+  it('history.at(-1) === round(state.currentBalance)', () => {
+    const mortgage: MortgageDto = {
+      id: 17,
+      title: 'Квартира на Ленина',
+      bank: null,
+      propertyPrice: 7_000_000,
+      downPayment: 1_500_000,
+      principal: 5_500_000,
+      rate: 6,
+      termMonths: 240,
+      startedOn: '2025-01-01',
+      monthlyPayment: null,
+      createdAt: '2025-01-01T00:00:00Z',
+      updatedAt: '2025-01-01T00:00:00Z',
+      usedPropertyBase: 0,
+      usedInterestBase: 0,
+    }
+    const mapped: MortgageModeParams = {
+      params: useCalculatorStore.getState().params,
+      state: {
+        currentBalance: 5_123_456.78,
+        currentRate: 6,
+        currentPayment: 41_000,
+        monthsLeft: 200,
+        payoffDate: '2042-01',
+        paidPrincipal: 376_543.22,
+        progressPct: 0.07,
+        asOf: '2026-01-01',
+      },
+      termFallback: false,
+      history: {
+        points: [
+          { month: 0, yearMonth: '2025-01', debt: 5_500_000, interest: 0, rate: 6, payment: 41_000 },
+          { month: 1, yearMonth: '2025-02', debt: 5_123_456.78, interest: 27_500, payment: 41_000, rate: 6 },
+        ],
+        elapsedMonths: 1,
+        paidInterest: 27_500,
+        interestByYear: { 2025: 27_500 },
+      },
+    }
+
+    const result = linkFromMortgage(mortgage, mapped)
+    expect(result.history?.at(-1)).toBe(Math.round(mapped.state.currentBalance))
+    expect(result.startedOn).toBe(mortgage.startedOn)
+    expect(result.paidInterest).toBe(mapped.history.paidInterest)
+    expect(result.termFallback).toBe(mapped.termFallback)
+    expect(result.balance).toBe(mapped.state.currentBalance)
   })
 })
 
@@ -185,5 +263,40 @@ describe('useCalculatorStore — миграция persist → v3', () => {
       expect(migrated.ownParams).toEqual(fresh)
       expect(migrated.linkedMortgage).toBeNull()
     }
+  })
+})
+
+describe('useCalculatorStore — миграция persist v3 → v4 (§2.6 дизайна таймлайна)', () => {
+  it('дозаливает три новых поля нулями в params и ownParams', () => {
+    // Персист версии 3 не содержит новых полей — типобезопасно этого не выразить,
+    // поэтому строим объект без Omit-проверки, как реальный localStorage.
+    const oldFields = {
+      apartmentPrice: 7_000_000,
+      downPayment: 1_500_000,
+      itRate: 6,
+      termYears: 20,
+      freeMonthly: 100_000,
+      depositRate: 16,
+      horizonYears: 10,
+      slipMonth: 36,
+      keyRate: 16,
+      bankDiscount: 0.5,
+      salary: null,
+    }
+    const migrated = migrate({ params: oldFields, ownParams: oldFields, slipEnabled: true }, 3)
+
+    expect(migrated.params.startingSavings).toBe(0)
+    expect(migrated.params.usedPropertyBase).toBe(0)
+    expect(migrated.params.usedInterestBase).toBe(0)
+    expect(migrated.ownParams.startingSavings).toBe(0)
+    expect(migrated.ownParams.usedPropertyBase).toBe(0)
+    expect(migrated.ownParams.usedInterestBase).toBe(0)
+    expect(migrated.slipEnabled).toBe(true)
+  })
+
+  it('сбрасывает linkedMortgage.history в undefined — старый персист его не содержит', () => {
+    const migrated = migrate({ linkedMortgage: { ...link(), history: [1, 2, 3] } }, 3)
+    expect(migrated.linkedMortgage?.history).toBeUndefined()
+    expect(migrated.linkedMortgage?.id).toBe(17)
   })
 })

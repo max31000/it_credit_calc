@@ -84,4 +84,20 @@ public class MigrationRunnerTests
 
         statements.Should().ContainSingle();
     }
+
+    [Fact]
+    public void MortgageDeductionsMigration_SplitsIntoExactlyOneStatement()
+    {
+        var assembly = Assembly.GetAssembly(typeof(MigrationRunner))!;
+        var resourceName = assembly.GetManifestResourceNames()
+            .Single(n => n.EndsWith("003_mortgage_deductions.sql"));
+
+        using var stream = assembly.GetManifestResourceStream(resourceName)!;
+        using var reader = new StreamReader(stream);
+        var sql = reader.ReadToEnd();
+
+        var statements = MigrationRunner.SplitSqlStatements(sql);
+
+        statements.Should().ContainSingle();
+    }
 }

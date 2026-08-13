@@ -17,6 +17,8 @@ import { formatRub } from '../../lib/formatters'
 export const MethodologySection = memo(function MethodologySection() {
   const params = useCalculatorStore((s) => s.params)
   const result = useCalculatorStore((s) => s.result)
+  const linkedMortgage = useCalculatorStore((s) => s.linkedMortgage)
+  const hasHistory = !!linkedMortgage?.history && linkedMortgage.history.length > 0
 
   return (
     <Paper p="lg" shadow="sm" radius="md">
@@ -129,6 +131,29 @@ export const MethodologySection = memo(function MethodologySection() {
                 Доход по вкладам показан без НДФЛ на проценты; при крупных суммах фактический доход
                 будет ниже.
               </List.Item>
+              <List.Item>
+                Стартовые накопления: подход «копить» держит их на вкладе, подход «гасить
+                досрочно» вносит их в долг в месяц 0 — так стартовый капитал (накопления минус
+                долг) у обоих подходов одинаков, и сравнение остаётся честным.
+              </List.Item>
+              <List.Item>
+                Сумма уже полученного вычета переводится в израсходованную базу по маргинальной
+                ставке НДФЛ (по указанной зарплате, иначе 13%) — вычет уменьшает доход сверху вниз
+                по прогрессивной шкале.
+              </List.Item>
+              {hasHistory && (
+                <List.Item>
+                  Прошлое до «сегодня» восстановлено по корректировкам трекера: если банк прислал
+                  снимок остатка, он считается авторитетнее расчёта и «затирает» его, а не
+                  корректирует.
+                </List.Item>
+              )}
+              {hasHistory && (
+                <List.Item>
+                  До «сегодня» трекер ведёт только долг, поэтому на графике «Капитал» серая линия
+                  в прошлом — это «минус долг», нижняя граница капитала, а не реальные накопления.
+                </List.Item>
+              )}
             </List>
           </Accordion.Panel>
         </Accordion.Item>

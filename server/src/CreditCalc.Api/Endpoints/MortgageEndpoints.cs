@@ -153,7 +153,8 @@ public static class MortgageEndpoints
         m.Id, m.Title, m.Bank, m.PropertyPrice, m.DownPayment, m.Principal, m.Rate,
         m.TermMonths, m.StartedOn, m.MonthlyPayment,
         DateTime.SpecifyKind(m.CreatedAt, DateTimeKind.Utc),
-        DateTime.SpecifyKind(m.UpdatedAt, DateTimeKind.Utc));
+        DateTime.SpecifyKind(m.UpdatedAt, DateTimeKind.Utc),
+        m.UsedPropertyBase, m.UsedInterestBase);
 
     private static MortgageEventDto ToDto(MortgageEvent e) => new(
         e.Id, e.MortgageId, e.Kind, e.OccurredOn, e.Amount, e.Rate, e.Note,

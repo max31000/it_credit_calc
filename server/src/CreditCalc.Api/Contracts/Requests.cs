@@ -1,6 +1,9 @@
 namespace CreditCalc.Api.Contracts;
 
-/// <summary>Тело <c>POST/PUT /api/mortgages/{id}</c>. Правила валидации — §3.2 спеки, дословно.</summary>
+/// <summary>
+/// Тело <c>POST/PUT /api/mortgages/{id}</c>. Правила валидации — §3.2 спеки tracker-design
+/// и §7.2 спеки mortgage-timeline-design (вычеты), дословно.
+/// </summary>
 public record MortgageRequest(
     string Title,
     string? Bank,
@@ -10,8 +13,13 @@ public record MortgageRequest(
     decimal Rate,
     int TermMonths,
     DateOnly StartedOn,
-    decimal? MonthlyPayment)
+    decimal? MonthlyPayment,
+    decimal UsedPropertyBase,
+    decimal UsedInterestBase)
 {
+    private const decimal PropertyDeductionBaseLimit = 2_000_000m;
+    private const decimal InterestDeductionBaseLimit = 3_000_000m;
+
     /// <summary>Возвращает текст ошибки на русском или <c>null</c>, если запрос валиден.</summary>
     public string? Validate()
     {
@@ -41,6 +49,15 @@ public record MortgageRequest(
 
         if (MonthlyPayment is <= 0)
             return "Ежемесячный платёж должен быть больше нуля";
+
+        if (UsedPropertyBase < 0)
+            return "Использованная база имущественного вычета не может быть отрицательной";
+
+        if (UsedPropertyBase > Math.Min(PropertyDeductionBaseLimit, PropertyPrice))
+            return "Использованная база имущественного вычета не может превышать 2 000 000 и стоимость недвижимости";
+
+        if (UsedInterestBase < 0 || UsedInterestBase > InterestDeductionBaseLimit)
+            return "Использованная база вычета по процентам должна быть от 0 до 3 000 000";
 
         return null;
     }
@@ -96,13 +113,16 @@ public record MortgageEventRequest(
     }
 }
 
-/// <summary>Тело <c>PUT /api/profile/settings</c>. Правила валидации — таблица §4.1 спеки, дословно.</summary>
+/// <summary>
+/// Тело <c>PUT /api/profile/settings</c>. Правила валидации — таблица §4.1 спеки tracker-design
+/// и §7.1 спеки mortgage-timeline-design (версия 1|2, <c>startingSavings</c>), дословно.
+/// </summary>
 public record UserSettingsRequest(int Version, UserSettingsDto? Settings)
 {
     /// <summary>Возвращает текст ошибки на русском или <c>null</c>, если запрос валиден.</summary>
     public string? Validate()
     {
-        if (Version != 1)
+        if (Version is not (1 or 2))
             return "Неподдерживаемая версия настроек";
 
         if (Settings is null)
@@ -125,6 +145,9 @@ public record UserSettingsRequest(int Version, UserSettingsDto? Settings)
 
         if (Settings.BankDiscount < -10 || Settings.BankDiscount > 10)
             return "Дисконт банка должен быть от -10 до 10";
+
+        if (Settings.StartingSavings is < 0 or > 100_000_000)
+            return "Накопления должны быть от 0 до 100 000 000";
 
         return null;
     }

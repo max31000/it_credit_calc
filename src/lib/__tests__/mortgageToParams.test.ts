@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { mortgageToParams } from '../mortgageToParams'
+import { mortgageToParams, accountSettingsFromParams } from '../mortgageToParams'
 import { computeMortgageState } from '../tracker'
 import type { AccountSettings, MortgageDto, MortgageEventDto } from '../../api/types'
 
@@ -16,6 +16,8 @@ const baseMortgage = (over: Partial<MortgageDto> = {}): MortgageDto => ({
   monthlyPayment: null,
   createdAt: '2025-01-01T00:00:00Z',
   updatedAt: '2025-01-01T00:00:00Z',
+  usedPropertyBase: 0,
+  usedInterestBase: 0,
   ...over,
 })
 
@@ -39,6 +41,7 @@ const settings: AccountSettings = {
   horizonYears: 10,
   keyRate: 16,
   bankDiscount: 0.5,
+  startingSavings: 0,
 }
 
 describe('mortgageToParams', () => {
@@ -112,5 +115,42 @@ describe('mortgageToParams', () => {
     const today = new Date('2025-01-01')
     const { params } = mortgageToParams({ mortgage, events: [], settings, today })
     expect(params.horizonYears).toBeLessThanOrEqual(params.termYears)
+  })
+
+  // ─── §2.4 дизайна: startingSavings, usedPropertyBase/usedInterestBase, history ───────
+  it('три новых поля доезжают до params: startingSavings из settings, вычеты из mortgage', () => {
+    const mortgage = baseMortgage({ usedPropertyBase: 700_000, usedInterestBase: 150_000 })
+    const today = new Date('2026-01-01')
+    const settingsWithSavings: AccountSettings = { ...settings, startingSavings: 1_200_000 }
+
+    const { params } = mortgageToParams({ mortgage, events: [], settings: settingsWithSavings, today })
+    expect(params.startingSavings).toBe(1_200_000)
+    expect(params.usedPropertyBase).toBe(700_000)
+    expect(params.usedInterestBase).toBe(150_000)
+  })
+
+  it('history.points.length − 1 === elapsedMonths', () => {
+    const mortgage = baseMortgage()
+    const today = new Date('2026-01-01')
+    const { history } = mortgageToParams({ mortgage, events: [], settings, today })
+    expect(history.points.length - 1).toBe(history.elapsedMonths)
+    expect(history.elapsedMonths).toBe(12)
+  })
+
+  it('apartmentPrice − downPayment === round(history.points.at(-1).debt)', () => {
+    const mortgage = baseMortgage()
+    const events = [ev({ kind: 'balance', occurredOn: '2025-06-01', amount: 5_200_000 })]
+    const today = new Date('2025-09-01')
+    const { params, history } = mortgageToParams({ mortgage, events, settings, today })
+    const last = history.points[history.points.length - 1]
+    expect(params.apartmentPrice - params.downPayment).toBe(Math.round(last.debt))
+  })
+
+  it('accountSettingsFromParams включает startingSavings', () => {
+    const mortgage = baseMortgage()
+    const today = new Date('2026-01-01')
+    const settingsWithSavings: AccountSettings = { ...settings, startingSavings: 500_000 }
+    const { params } = mortgageToParams({ mortgage, events: [], settings: settingsWithSavings, today })
+    expect(accountSettingsFromParams(params).startingSavings).toBe(500_000)
   })
 })

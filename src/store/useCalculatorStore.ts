@@ -2,9 +2,10 @@ import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { startTransition } from 'react'
 import { calculate, type MortgageParams, type CalculationResult } from '../lib/engine'
-import type { AccountSettings } from '../api/types'
+import type { AccountSettings, MortgageDto } from '../api/types'
+import type { MortgageModeParams } from '../lib/mortgageToParams'
 
-/** Шесть полей, которые живут в аккаунте (С3 спеки), а не в сценарии калькулятора */
+/** Семь полей, которые живут в аккаунте (С3 спеки, §2.6 дизайна таймлайна), а не в сценарии калькулятора */
 export const ACCOUNT_SETTING_KEYS = [
   'salary',
   'depositRate',
@@ -12,6 +13,7 @@ export const ACCOUNT_SETTING_KEYS = [
   'horizonYears',
   'keyRate',
   'bankDiscount',
+  'startingSavings',
 ] as const
 
 type AccountSettingKey = (typeof ACCOUNT_SETTING_KEYS)[number]
@@ -38,6 +40,30 @@ export interface LinkedMortgage {
    *  Опционально: undefined в персисте, сохранённом до добавления поля — тогда строку
    *  ставки в баннере не показываем. */
   rate?: number
+  /** 'YYYY-MM-DD' — дата выдачи, для подписей оси таймлайна (§2.6 дизайна) */
+  startedOn?: string
+  /** Компактная история: остаток долга по месяцам от выдачи; history[history.length-1] === balance */
+  history?: number[]
+  /** Σ уплаченных процентов за историю, ₽ — для выводов и помощника по вычетам */
+  paidInterest?: number
+}
+
+/** Собирает `LinkedMortgage` из ипотеки и результата `mortgageToParams` — один хелпер
+ *  вместо трёх копий в `MortgagePage` / `MortgageCard` / `CalculatorPage` (§2.6 дизайна). */
+export function linkFromMortgage(m: MortgageDto, mapped: MortgageModeParams): LinkedMortgage {
+  return {
+    id: m.id,
+    title: m.title,
+    asOf: mapped.state.asOf,
+    balance: mapped.state.currentBalance,
+    payment: mapped.state.currentPayment,
+    termFallback: mapped.termFallback,
+    startedOn: m.startedOn,
+    // Округляем до целого рубля — история хранится в персисте и на графиках компактно,
+    // копейки не нужны (то же округление, что в `computeMortgageState.currentBalance` → баннер).
+    history: mapped.history.points.map((p) => Math.round(p.debt)),
+    paidInterest: mapped.history.paidInterest,
+  }
 }
 
 interface CalculatorState {
@@ -75,6 +101,9 @@ const defaultParams: MortgageParams = {
   keyRate: 16,
   bankDiscount: 0.5,
   salary: null,
+  startingSavings: 0,
+  usedPropertyBase: 0,
+  usedInterestBase: 0,
 }
 
 /** Слёт уходит в движок только если тумблер включён — иначе params.slipMonth лишь «запомненная» позиция слайдера. */
@@ -158,6 +187,8 @@ export const useCalculatorStore = create<CalculatorState>()(
           horizonYears: s.horizonYears,
           keyRate: s.keyRate,
           bankDiscount: s.bankDiscount,
+          // Старая строка (версия 1 настроек) отдаёт undefined — трактуем как 0, не NaN.
+          startingSavings: s.startingSavings ?? 0,
         }
         // Инвариант horizonYears ≤ termYears держим только для активных params: в режиме
         // ипотеки termYears может быть короче серверного горизонта (например, 2 года до
@@ -177,7 +208,7 @@ export const useCalculatorStore = create<CalculatorState>()(
     }),
     {
       name: 'mortgage-calculator-params',
-      version: 3,
+      version: 4,
       partialize: (state) => ({
         params: state.params,
         ownParams: state.ownParams,
@@ -186,14 +217,32 @@ export const useCalculatorStore = create<CalculatorState>()(
       }),
       migrate: (persisted, version): PersistedCalculatorState => {
         const prev = persisted as Partial<PersistedCalculatorState>
+        // Старый персист (любая версия < 4) не содержит startingSavings/usedPropertyBase/
+        // usedInterestBase — дозаливаем нулями (§2.6 дизайна таймлайна).
+        const fillNewFields = (p: MortgageParams | undefined): MortgageParams => ({
+          ...(p ?? defaultParams),
+          startingSavings: p?.startingSavings ?? 0,
+          usedPropertyBase: p?.usedPropertyBase ?? 0,
+          usedInterestBase: p?.usedInterestBase ?? 0,
+        })
         if (version < 3) {
           return {
-            params: prev.params ?? defaultParams,
-            ownParams: prev.params ?? defaultParams,
+            params: fillNewFields(prev.params),
+            ownParams: fillNewFields(prev.params),
             // Старое сохранённое значение slipMonth (обычно дефолтные 36) — не осознанный
             // выбор пользователя, а дефолт слайдера. До v2 тумблера не было — выключаем.
             slipEnabled: version < 2 ? false : (prev.slipEnabled ?? false),
             linkedMortgage: null,
+          }
+        }
+        if (version < 4) {
+          // linkedMortgage.history в персисте v3 отсутствует — сбрасываем в undefined,
+          // страница калькулятора перезапросит свежую историю у трекера.
+          return {
+            params: fillNewFields(prev.params),
+            ownParams: fillNewFields(prev.ownParams),
+            slipEnabled: prev.slipEnabled ?? false,
+            linkedMortgage: prev.linkedMortgage ? { ...prev.linkedMortgage, history: undefined } : null,
           }
         }
         return {

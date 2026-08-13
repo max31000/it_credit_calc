@@ -12,7 +12,9 @@ public record MortgageDto(
     DateOnly StartedOn,
     decimal? MonthlyPayment,
     DateTime CreatedAt,
-    DateTime UpdatedAt);
+    DateTime UpdatedAt,
+    decimal UsedPropertyBase,
+    decimal UsedInterestBase);
 
 public record MortgageEventDto(
     ulong Id,
@@ -32,14 +34,20 @@ public record AuthUserDto(ulong Id, long TelegramId, string? Username, string? F
 /// <summary>Ответ <c>POST /api/auth/telegram</c>.</summary>
 public record AuthResponseDto(string Token, AuthUserDto User);
 
-/// <summary>Шесть настроек аккаунта, хранимых на сервере (spec §4.1). <c>Salary</c> — единственное nullable поле.</summary>
+/// <summary>
+/// Настройки аккаунта, хранимые на сервере (spec §4.1 tracker-design, §7.1 mortgage-timeline-design).
+/// <c>Salary</c> и <c>StartingSavings</c> — nullable поля: <c>StartingSavings</c> nullable потому,
+/// что строки, записанные версией 1 (без этого поля), читаются как <c>null</c> и нормализуются
+/// в <c>0</c> при отдаче — миграция данных не требуется.
+/// </summary>
 public record UserSettingsDto(
     decimal? Salary,
     decimal DepositRate,
     decimal FreeMonthly,
     int HorizonYears,
     decimal KeyRate,
-    decimal BankDiscount);
+    decimal BankDiscount,
+    decimal? StartingSavings);
 
 /// <summary>Ответ <c>GET/PUT /api/profile/settings</c>. <c>Settings = null</c> — пользователь ещё не сохранял настройки.</summary>
 public record UserSettingsResponse(int Version, UserSettingsDto? Settings, DateTime? UpdatedAt);

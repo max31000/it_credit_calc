@@ -12,7 +12,7 @@ import { MortgageModeBanner } from '../components/calculator/MortgageModeBanner'
 import { TRACKER_ENABLED, ApiError } from '../api/client'
 import { getMortgage } from '../api/mortgages'
 import { useAuthStore } from '../store/useAuthStore'
-import { useCalculatorStore } from '../store/useCalculatorStore'
+import { useCalculatorStore, linkFromMortgage } from '../store/useCalculatorStore'
 import { mortgageToParams, accountSettingsFromParams } from '../lib/mortgageToParams'
 import type { MortgageRequest } from '../api/types'
 
@@ -39,22 +39,8 @@ export default function CalculatorPage() {
     getMortgage(linkedMortgageId)
       .then(({ mortgage, events }) => {
         if (cancelled) return
-        const {
-          params: freshParams,
-          state,
-          termFallback,
-        } = mortgageToParams({ mortgage, events, settings, today: new Date() })
-        enterMortgageMode(
-          {
-            id: mortgage.id,
-            title: mortgage.title,
-            asOf: state.asOf,
-            balance: state.currentBalance,
-            payment: state.currentPayment,
-            termFallback,
-          },
-          freshParams,
-        )
+        const mapped = mortgageToParams({ mortgage, events, settings, today: new Date() })
+        enterMortgageMode(linkFromMortgage(mortgage, mapped), mapped.params)
       })
       .catch((e) => {
         if (cancelled) return
@@ -80,6 +66,12 @@ export default function CalculatorPage() {
       termMonths: params.termYears * 12,
       monthlyPayment: result.minPayment,
       startedOn: new Date().toISOString().slice(0, 10),
+      // Уже введённые (гостем или пользователем) израсходованные базы вычетов переносим
+      // как есть — это факт про конкретную квартиру/кредит, а не про расчёт (§1.3 дизайна
+      // docs/specs/2026-08-13-mortgage-timeline-design.md), и MortgageForm их уже подхватывает
+      // из `initial`.
+      usedPropertyBase: params.usedPropertyBase,
+      usedInterestBase: params.usedInterestBase,
     }
     navigate('/tracker/new', { state: { prefill } })
   }

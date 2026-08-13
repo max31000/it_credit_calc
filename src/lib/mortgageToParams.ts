@@ -5,7 +5,7 @@
  */
 import type { MortgageParams } from './engine'
 import type { AccountSettings, MortgageDto, MortgageEventDto } from '../api/types'
-import { computeMortgageState, type MortgageState } from './tracker'
+import { computeMortgageState, buildDebtHistory, type MortgageState, type DebtHistory } from './tracker'
 
 export interface MortgageModeParamsInput {
   mortgage: MortgageDto
@@ -20,13 +20,15 @@ export interface MortgageModeParams {
   state: MortgageState
   /** true — monthsLeft === null, срок взят из планового графика (допущение 4) */
   termFallback: boolean
+  /** Полная реконструкция прошлого — для графиков и для помощника по вычетам (§2.4 дизайна) */
+  history: DebtHistory
 }
 
 function clamp(v: number, lo: number, hi: number): number {
   return Math.min(hi, Math.max(lo, v))
 }
 
-/** Извлекает шесть полей аккаунта (С3) из активных `MortgageParams` — общий хелпер
+/** Извлекает семь полей аккаунта из активных `MortgageParams` — общий хелпер
  *  для мест, которым нужно передать «текущие настройки аккаунта» в `mortgageToParams`. */
 export function accountSettingsFromParams(p: MortgageParams): AccountSettings {
   return {
@@ -36,6 +38,7 @@ export function accountSettingsFromParams(p: MortgageParams): AccountSettings {
     horizonYears: p.horizonYears,
     keyRate: p.keyRate,
     bankDiscount: p.bankDiscount,
+    startingSavings: p.startingSavings,
   }
 }
 
@@ -53,6 +56,7 @@ function monthKey(dateStr: string): number {
 export function mortgageToParams(input: MortgageModeParamsInput): MortgageModeParams {
   const { mortgage, events, settings, today } = input
   const state = computeMortgageState(mortgage, events, today)
+  const history = buildDebtHistory(mortgage, events, today)
 
   const termFallback = state.monthsLeft === null
   let termYears: number
@@ -83,7 +87,10 @@ export function mortgageToParams(input: MortgageModeParamsInput): MortgageModePa
     keyRate: settings.keyRate,
     bankDiscount: settings.bankDiscount,
     salary: settings.salary,
+    startingSavings: settings.startingSavings,
+    usedPropertyBase: mortgage.usedPropertyBase,
+    usedInterestBase: mortgage.usedInterestBase,
   }
 
-  return { params, state, termFallback }
+  return { params, state, termFallback, history }
 }

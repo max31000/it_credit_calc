@@ -5,7 +5,8 @@ namespace CreditCalc.Api.Tests;
 
 /// <summary>
 /// По одному кейсу на каждое правило валидации <see cref="UserSettingsRequest.Validate"/>
-/// (таблица §4.1 спеки), плюс happy-path. Чистые юниты, БД не нужна — как <c>ValidationTests</c>.
+/// (таблица §4.1 спеки tracker-design + §7.1 спеки mortgage-timeline-design: версия 1|2,
+/// диапазон <c>StartingSavings</c>), плюс happy-path. Чистые юниты, БД не нужна — как <c>ValidationTests</c>.
 /// </summary>
 public class UserSettingsValidationTests
 {
@@ -15,9 +16,10 @@ public class UserSettingsValidationTests
         FreeMonthly: 100_000m,
         HorizonYears: 10,
         KeyRate: 16m,
-        BankDiscount: 0.5m);
+        BankDiscount: 0.5m,
+        StartingSavings: 800_000m);
 
-    private static UserSettingsRequest ValidRequest() => new(Version: 1, Settings: ValidSettings());
+    private static UserSettingsRequest ValidRequest() => new(Version: 2, Settings: ValidSettings());
 
     [Fact]
     public void Valid_ReturnsNull()
@@ -33,9 +35,21 @@ public class UserSettingsValidationTests
     }
 
     [Fact]
-    public void VersionNot1_ReturnsError()
+    public void Version1_IsValid()
     {
-        (ValidRequest() with { Version = 2 }).Validate().Should().Be("Неподдерживаемая версия настроек");
+        (ValidRequest() with { Version = 1 }).Validate().Should().BeNull();
+    }
+
+    [Fact]
+    public void Version2_IsValid()
+    {
+        (ValidRequest() with { Version = 2 }).Validate().Should().BeNull();
+    }
+
+    [Fact]
+    public void Version3_ReturnsError()
+    {
+        (ValidRequest() with { Version = 3 }).Validate().Should().Be("Неподдерживаемая версия настроек");
     }
 
     [Fact]
@@ -134,6 +148,36 @@ public class UserSettingsValidationTests
         (ValidRequest() with { Settings = ValidSettings() with { BankDiscount = -10m } })
             .Validate().Should().BeNull();
         (ValidRequest() with { Settings = ValidSettings() with { BankDiscount = 10m } })
+            .Validate().Should().BeNull();
+    }
+
+    [Fact]
+    public void StartingSavingsNull_IsValid()
+    {
+        (ValidRequest() with { Settings = ValidSettings() with { StartingSavings = null } })
+            .Validate().Should().BeNull();
+    }
+
+    [Fact]
+    public void StartingSavingsBelowRange_ReturnsError()
+    {
+        (ValidRequest() with { Settings = ValidSettings() with { StartingSavings = -1 } })
+            .Validate().Should().Be("Накопления должны быть от 0 до 100 000 000");
+    }
+
+    [Fact]
+    public void StartingSavingsAboveRange_ReturnsError()
+    {
+        (ValidRequest() with { Settings = ValidSettings() with { StartingSavings = 100_000_001m } })
+            .Validate().Should().Be("Накопления должны быть от 0 до 100 000 000");
+    }
+
+    [Fact]
+    public void StartingSavingsAtBounds_IsValid()
+    {
+        (ValidRequest() with { Settings = ValidSettings() with { StartingSavings = 0 } })
+            .Validate().Should().BeNull();
+        (ValidRequest() with { Settings = ValidSettings() with { StartingSavings = 100_000_000m } })
             .Validate().Should().BeNull();
     }
 }

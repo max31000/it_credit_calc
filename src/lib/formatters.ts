@@ -26,3 +26,6 @@ export const formatDate = (ymd: string): string => {
   const [y, m, d] = ymd.split('-')
   return `${d}.${m}.${y}`
 }
+
+/** Месяцы «в прошлом» → «5 лет назад» / «3 мес. назад» (тултип графика в режиме ипотеки, §5.4) */
+export const formatMonthsAgo = (m: number): string => `${formatMonths(m)} назад`

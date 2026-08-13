@@ -1,8 +1,12 @@
 import { useState } from 'react'
-import { Button, Group, Stack, Text, TextInput } from '@mantine/core'
+import { Button, Divider, Group, Select, Stack, Text, TextInput } from '@mantine/core'
 import { NumericInput } from '../controls/NumericInput'
 import { relinkLoan, type LoanTriple } from '../../lib/loanLink'
+import { formatRub } from '../../lib/formatters'
 import type { MortgageRequest } from '../../api/types'
+
+const PROPERTY_DEDUCTION_LIMIT = 2_000_000
+const INTEREST_DEDUCTION_LIMIT = 3_000_000
 
 function todayPlusDay(): string {
   const d = new Date()
@@ -16,6 +20,12 @@ interface MortgageFormProps {
   submitting?: boolean
   onSubmit: (data: MortgageRequest) => void
   onCancel: () => void
+  /**
+   * Помощник «по какой год получен вычет по процентам» (§1.5 дизайна таймлайна) — доступен
+   * только при редактировании существующей ипотеки, у которой есть реконструированная история.
+   * Помощник только пишет число в поле `usedInterestBase`, своего состояния не хранит.
+   */
+  deductionHelp?: { interestByYear: Record<number, number>; paidInterest: number }
 }
 
 /**
@@ -23,7 +33,7 @@ interface MortgageFormProps {
  * Цена/взнос/кредит связаны через `relinkLoan` (§6 спеки) — сохранить несогласующуюся
  * тройку через UI нельзя, независимая валидация остаётся только страховкой.
  */
-export function MortgageForm({ initial, submitting, onSubmit, onCancel }: MortgageFormProps) {
+export function MortgageForm({ initial, submitting, onSubmit, onCancel, deductionHelp }: MortgageFormProps) {
   // G10: префилл из калькулятора не содержит title — первое, что видит пользователь,
   // не должно быть ошибкой валидации.
   const [title, setTitle] = useState(initial?.title ?? (initial ? 'Моя ипотека' : ''))
@@ -44,7 +54,38 @@ export function MortgageForm({ initial, submitting, onSubmit, onCancel }: Mortga
   const [termMonths, setTermMonths] = useState<number | null>(initial?.termMonths ?? null)
   const [startedOn, setStartedOn] = useState(initial?.startedOn ?? new Date().toISOString().slice(0, 10))
   const [monthlyPayment, setMonthlyPayment] = useState<number | null>(initial?.monthlyPayment ?? null)
+  // Дефолт 0, не null — сервер требует число (§7.2 дизайна таймлайна).
+  const [usedPropertyBase, setUsedPropertyBase] = useState<number>(initial?.usedPropertyBase ?? 0)
+  const [usedInterestBase, setUsedInterestBase] = useState<number>(initial?.usedInterestBase ?? 0)
   const [error, setError] = useState<string | null>(null)
+
+  const propertyBaseLimit = loan.propertyPrice !== null && loan.propertyPrice > 0
+    ? Math.min(PROPERTY_DEDUCTION_LIMIT, loan.propertyPrice)
+    : PROPERTY_DEDUCTION_LIMIT
+
+  const interestYears = deductionHelp
+    ? Array.from(
+        new Set(
+          Object.keys(deductionHelp.interestByYear)
+            .map(Number)
+            .filter((y) => y < new Date().getFullYear()),
+        ),
+      ).sort((a, b) => a - b)
+    : []
+
+  const handleInterestYearSelect = (yearStr: string | null) => {
+    if (!yearStr || !deductionHelp) return
+    const year = Number(yearStr)
+    const sum = Object.entries(deductionHelp.interestByYear)
+      .filter(([y]) => Number(y) <= year)
+      .reduce((acc, [, v]) => acc + v, 0)
+    setUsedInterestBase(Math.min(INTEREST_DEDUCTION_LIMIT, Math.round(sum)))
+  }
+
+  const handleInterestAllTime = () => {
+    if (!deductionHelp) return
+    setUsedInterestBase(Math.min(INTEREST_DEDUCTION_LIMIT, Math.round(deductionHelp.paidInterest)))
+  }
 
   const handleLoanField = (field: keyof LoanTriple) => (v: number | null) => {
     if (v === null) return
@@ -76,6 +117,10 @@ export function MortgageForm({ initial, submitting, onSubmit, onCancel }: Mortga
     if (termMonths === null || termMonths < 1 || termMonths > 600) return 'Срок — от 1 до 600 месяцев'
     if (!startedOn || startedOn > todayPlusDay()) return 'Дата оформления не может быть в будущем'
     if (monthlyPayment !== null && monthlyPayment <= 0) return 'Ежемесячный платёж должен быть больше нуля'
+    if (usedPropertyBase < 0 || usedPropertyBase > propertyBaseLimit)
+      return `Использованная база имущественного вычета не может превышать ${formatRub(propertyBaseLimit)} и стоимость недвижимости`
+    if (usedInterestBase < 0 || usedInterestBase > INTEREST_DEDUCTION_LIMIT)
+      return `Использованная база вычета по процентам должна быть от 0 до ${formatRub(INTEREST_DEDUCTION_LIMIT)}`
     return null
   }
 
@@ -96,6 +141,8 @@ export function MortgageForm({ initial, submitting, onSubmit, onCancel }: Mortga
       termMonths: termMonths as number,
       startedOn,
       monthlyPayment,
+      usedPropertyBase,
+      usedInterestBase,
     })
   }
 
@@ -177,6 +224,44 @@ export function MortgageForm({ initial, submitting, onSubmit, onCancel }: Mortga
         thousandSeparator=" "
         suffix=" ₽"
       />
+
+      <Divider label="Налоговые вычеты (уже полученные)" labelPosition="left" mt="xs" />
+
+      <NumericInput
+        label="Имущественный вычет: израсходовано базы, ₽"
+        description={`0…${formatRub(propertyBaseLimit)}`}
+        value={usedPropertyBase}
+        onChange={(v) => setUsedPropertyBase(v ?? 0)}
+        min={0}
+        max={propertyBaseLimit}
+        thousandSeparator=" "
+        suffix=" ₽"
+      />
+      <NumericInput
+        label="Вычет по процентам: израсходовано базы, ₽"
+        description={`0…${formatRub(INTEREST_DEDUCTION_LIMIT)}`}
+        value={usedInterestBase}
+        onChange={(v) => setUsedInterestBase(v ?? 0)}
+        min={0}
+        max={INTEREST_DEDUCTION_LIMIT}
+        thousandSeparator=" "
+        suffix=" ₽"
+      />
+      {deductionHelp && (
+        <Group gap="xs" align="flex-end" wrap="wrap">
+          <Select
+            label="Вычет по процентам получен по … год включительно"
+            placeholder="выбрать год"
+            data={interestYears.map((y) => ({ value: String(y), label: String(y) }))}
+            onChange={handleInterestYearSelect}
+            disabled={interestYears.length === 0}
+            style={{ flex: 1, minWidth: 220 }}
+          />
+          <Button variant="default" size="sm" onClick={handleInterestAllTime}>
+            За всё время
+          </Button>
+        </Group>
+      )}
       {error && (
         <Text size="sm" c="red">
           {error}

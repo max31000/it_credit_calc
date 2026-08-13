@@ -3,7 +3,7 @@ import { IconChartLine } from '@tabler/icons-react'
 import { useNavigate } from 'react-router-dom'
 import { computeMortgageState } from '../../lib/tracker'
 import { mortgageToParams, accountSettingsFromParams } from '../../lib/mortgageToParams'
-import { useCalculatorStore } from '../../store/useCalculatorStore'
+import { useCalculatorStore, linkFromMortgage } from '../../store/useCalculatorStore'
 import { formatRub, formatMonths, formatYearMonth } from '../../lib/formatters'
 import type { MortgageDto, MortgageEventDto } from '../../api/types'
 
@@ -22,23 +22,8 @@ export function MortgageCard({ mortgage, events }: MortgageCardProps) {
     e.stopPropagation()
     if (mortgageClosed) return
     const settings = accountSettingsFromParams(useCalculatorStore.getState().ownParams)
-    const { params, state: mState, termFallback } = mortgageToParams({
-      mortgage,
-      events,
-      settings,
-      today: new Date(),
-    })
-    enterMortgageMode(
-      {
-        id: mortgage.id,
-        title: mortgage.title,
-        asOf: mState.asOf,
-        balance: mState.currentBalance,
-        payment: mState.currentPayment,
-        termFallback,
-      },
-      params,
-    )
+    const mapped = mortgageToParams({ mortgage, events, settings, today: new Date() })
+    enterMortgageMode(linkFromMortgage(mortgage, mapped), mapped.params)
     navigate('/')
   }
 

@@ -5,21 +5,52 @@ import { useCalculatorStore } from '../../store/useCalculatorStore'
 import { SliderInput } from '../controls/SliderInput'
 import { formatPct, formatMonths } from '../../lib/formatters'
 
+/** Индекс календарного месяца: year*12 + (month-1) — та же арифметика, что в timeline.ts */
+function monthKeyFromDate(dateStr: string): number {
+  const [y, m] = dateStr.split('-').map(Number)
+  return y * 12 + (m - 1)
+}
+
+function formatMonthKeyAsMMYYYY(key: number): string {
+  const y = Math.floor(key / 12)
+  const m = key - y * 12 + 1
+  return `${String(m).padStart(2, '0')}.${y}`
+}
+
 export const SlipSection = memo(function SlipSection() {
   const params = useCalculatorStore((s) => s.params)
   const result = useCalculatorStore((s) => s.result)
   const setParam = useCalculatorStore((s) => s.setParam)
   const slipEnabled = useCalculatorStore((s) => s.slipEnabled)
   const setSlipEnabled = useCalculatorStore((s) => s.setSlipEnabled)
+  const linkedMortgage = useCalculatorStore((s) => s.linkedMortgage)
 
   const maxSlipMonth = params.termYears * 12
   const horizonMonths = params.horizonYears * 12
   const slipBeyondHorizon = slipEnabled && params.slipMonth > horizonMonths
 
+  // Двухуровневая подпись (§1.4 дизайна таймлайна): слайдер остаётся в единицах движка
+  // («от сегодня»), но в режиме ипотеки подписываем ещё и абсолютный месяц ипотеки + календарь.
+  const hasHistory = !!linkedMortgage?.history && linkedMortgage.history.length > 0
+  const todayMonth = hasHistory ? linkedMortgage!.history!.length - 1 : 0
+  const absoluteSlipMonth = todayMonth + params.slipMonth
+  const slipCalendarLabel =
+    hasHistory && linkedMortgage?.startedOn
+      ? formatMonthKeyAsMMYYYY(monthKeyFromDate(linkedMortgage.startedOn) + absoluteSlipMonth)
+      : null
+
   const slipSecondaryLabel =
     params.slipMonth === 0
       ? 'Слёт не моделируется — базовый сценарий'
-      : `Через ${formatMonths(params.slipMonth)} после начала ипотеки`
+      : hasHistory
+        ? `Через ${formatMonths(params.slipMonth)} от сегодня · ${absoluteSlipMonth}-й месяц ипотеки` +
+          (slipCalendarLabel ? ` · примерно ${slipCalendarLabel}` : '')
+        : `Через ${formatMonths(params.slipMonth)} после начала ипотеки`
+
+  // Слёт уже произошёл фактически (§1.7 дизайна): текущая ставка не ниже той, что даёт формула
+  // рыночной ставки при слёте — моделировать гипотетический слёт дальше бессмысленно.
+  // Тумблер принудительно не выключаем — это гипотеза пользователя.
+  const rateAlreadyMarket = params.itRate >= result.marketRateAtSlip
 
   const yearMarks = [4, 8, 12, 16, 20, 25, 30]
     .map((y) => ({ value: y * 12, label: `${y} л.` }))
@@ -56,6 +87,12 @@ export const SlipSection = memo(function SlipSection() {
 
       <Collapse in={slipEnabled}>
         <Stack gap="lg">
+          {rateAlreadyMarket && (
+            <Alert color="orange" variant="light" icon={<IconAlertTriangle size={16} />}>
+              Действующая ставка уже не ниже рыночной — моделировать слёт бессмысленно.
+            </Alert>
+          )}
+
           <Stack gap={4}>
             <SliderInput
               label="Месяц слёта"

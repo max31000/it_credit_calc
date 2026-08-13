@@ -18,6 +18,10 @@ export interface MortgageDto {
   monthlyPayment: number | null
   createdAt: string // ISO-8601 UTC
   updatedAt: string // ISO-8601 UTC
+  /** Уже израсходованная база имущественного вычета, ₽ (§2.5, §7.2 дизайна) */
+  usedPropertyBase: number
+  /** Уже израсходованная база вычета по ипотечным процентам, ₽ */
+  usedInterestBase: number
 }
 
 export interface MortgageEventDto {
@@ -48,6 +52,10 @@ export interface MortgageRequest {
   termMonths: number
   startedOn: string
   monthlyPayment: number | null
+  /** Уже израсходованная база имущественного вычета, ₽ (0…min(2 000 000, propertyPrice)) */
+  usedPropertyBase: number
+  /** Уже израсходованная база вычета по ипотечным процентам, ₽ (0…3 000 000) */
+  usedInterestBase: number
 }
 
 /** Тело POST /api/mortgages/{id}/events */
@@ -59,7 +67,7 @@ export interface MortgageEventRequest {
   note: string | null
 }
 
-/** Шесть полей, живущих в аккаунте (С3 спеки), а не в конкретном сценарии калькулятора */
+/** Семь полей, живущих в аккаунте (С3 спеки, §2.5 дизайна таймлайна), а не в сценарии калькулятора */
 export interface AccountSettings {
   salary: number | null
   depositRate: number
@@ -67,6 +75,8 @@ export interface AccountSettings {
   horizonYears: number
   keyRate: number
   bankDiscount: number
+  /** Текущие накопления сверх кредита на «сегодня», ₽ */
+  startingSavings: number
 }
 
 /** Ответ GET/PUT /api/profile/settings. settings === null — пользователь ещё не сохранял. */

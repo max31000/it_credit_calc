@@ -19,6 +19,8 @@ public class Mortgage
     public decimal? MonthlyPayment { get; set; }
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
+    public decimal UsedPropertyBase { get; set; }
+    public decimal UsedInterestBase { get; set; }
 }
 
 /// <summary>
@@ -56,9 +58,9 @@ public class MortgageRepository
         await using var connection = _db.Create();
         return await connection.ExecuteScalarAsync<ulong>(
             @"INSERT INTO mortgages
-                  (user_id, title, bank, property_price, down_payment, principal, rate, term_months, started_on, monthly_payment)
+                  (user_id, title, bank, property_price, down_payment, principal, rate, term_months, started_on, monthly_payment, used_property_base, used_interest_base)
               VALUES
-                  (@UserId, @Title, @Bank, @PropertyPrice, @DownPayment, @Principal, @Rate, @TermMonths, @StartedOn, @MonthlyPayment);
+                  (@UserId, @Title, @Bank, @PropertyPrice, @DownPayment, @Principal, @Rate, @TermMonths, @StartedOn, @MonthlyPayment, @UsedPropertyBase, @UsedInterestBase);
               SELECT LAST_INSERT_ID();",
             new
             {
@@ -72,6 +74,8 @@ public class MortgageRepository
                 request.TermMonths,
                 request.StartedOn,
                 request.MonthlyPayment,
+                request.UsedPropertyBase,
+                request.UsedInterestBase,
             });
     }
 
@@ -83,7 +87,8 @@ public class MortgageRepository
             @"UPDATE mortgages SET
                   title = @Title, bank = @Bank, property_price = @PropertyPrice, down_payment = @DownPayment,
                   principal = @Principal, rate = @Rate, term_months = @TermMonths,
-                  started_on = @StartedOn, monthly_payment = @MonthlyPayment
+                  started_on = @StartedOn, monthly_payment = @MonthlyPayment,
+                  used_property_base = @UsedPropertyBase, used_interest_base = @UsedInterestBase
               WHERE id = @Id AND user_id = @UserId",
             new
             {
@@ -98,6 +103,8 @@ public class MortgageRepository
                 request.TermMonths,
                 request.StartedOn,
                 request.MonthlyPayment,
+                request.UsedPropertyBase,
+                request.UsedInterestBase,
             });
 
         if (rows == 0) return null;

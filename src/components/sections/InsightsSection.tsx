@@ -9,6 +9,7 @@ import {
   IconFlagCheck,
   IconAlertTriangle,
   IconArrowDown,
+  IconHistory,
 } from '@tabler/icons-react'
 import { useCalculatorStore } from '../../store/useCalculatorStore'
 import { MetricCard } from '../controls/MetricCard'
@@ -48,11 +49,18 @@ export const InsightsSection = memo(function InsightsSection() {
   const params = useCalculatorStore((s) => s.params)
   const result = useCalculatorStore((s) => s.result)
   const effectiveSlipMonth = useCalculatorStore((s) => s.effectiveSlipMonth())
+  const linkedMortgage = useCalculatorStore((s) => s.linkedMortgage)
 
   const { summary, slip, payoffMonth, safetyMonth, minPayment } = result
   const hasLoan = result.loanAmount > 0
   const budgetTooSmall = hasLoan && params.freeMonthly <= minPayment
   const horizonLabel = `${params.horizonYears} лет`
+
+  // Режим ипотеки: все горизонтные величины по-прежнему считаются «от сегодня», абсолютный
+  // месяц ипотеки идёт справочно в скобках (§6 дизайна таймлайна).
+  const history = linkedMortgage?.history
+  const hasHistory = !!history && history.length > 0
+  const todayMonth = hasHistory ? history!.length - 1 : 0
 
   if (!hasLoan) {
     return null
@@ -65,6 +73,7 @@ export const InsightsSection = memo(function InsightsSection() {
     <Paper p="lg" shadow="sm" radius="md">
       <Text fw={600} size="lg">
         Выводы на горизонте {horizonLabel}
+        {hasHistory && ' — считаем от сегодня'}
       </Text>
       <Divider mb="md" mt="xs" />
 
@@ -99,6 +108,15 @@ export const InsightsSection = memo(function InsightsSection() {
           description={result.tax ? 'за горизонт' : 'укажите зарплату'}
         />
       </SimpleGrid>
+
+      {result.tax && (
+        <Text size="xs" c="dimmed" mb="lg">
+          Доступная база: имущественный {formatRub(result.tax.propertyBaseStart)}
+          {result.tax.propertyBaseStart <= 0 && ' (исчерпан — в прогнозе не начисляется)'}, проценты{' '}
+          {formatRub(result.tax.interestBaseStart)}
+          {result.tax.interestBaseStart <= 0 && ' (исчерпан — в прогнозе не начисляется)'}
+        </Text>
+      )}
 
       <Stack gap="sm">
         {budgetTooSmall && (
@@ -142,11 +160,17 @@ export const InsightsSection = memo(function InsightsSection() {
             color="green"
             title="Когда накоплений хватит, чтобы закрыть ипотеку целиком"
           >
-            {payoffMonth !== null ? (
+            {payoffMonth === 0 ? (
               <>
-                Через <b>{formatMonths(payoffMonth)}</b> (без слёта) накопления сравняются с
-                остатком долга — с этого момента ипотеку можно погасить одним платежом в любой
-                день.
+                Накоплений (<b>{formatRub(params.startingSavings)}</b>) уже сейчас хватает, чтобы
+                закрыть остаток долга (<b>{formatRub(result.loanAmount)}</b>) одним платежом.
+              </>
+            ) : payoffMonth !== null ? (
+              <>
+                Через <b>{formatMonths(payoffMonth)}</b> (без слёта
+                {hasHistory && `, ${todayMonth + payoffMonth}-й месяц ипотеки`}) накопления
+                сравняются с остатком долга — с этого момента ипотеку можно погасить одним
+                платежом в любой день.
               </>
             ) : (
               <>
@@ -182,7 +206,11 @@ export const InsightsSection = memo(function InsightsSection() {
             <InsightCard
               icon={<IconCoin size={18} />}
               color="red"
-              title={`Сколько стоит слёт в месяц ${effectiveSlipMonth}`}
+              title={
+                hasHistory
+                  ? `Сколько стоит слёт через ${formatMonths(effectiveSlipMonth)} (${todayMonth + effectiveSlipMonth}-й месяц ипотеки)`
+                  : `Сколько стоит слёт в месяц ${effectiveSlipMonth}`
+              }
             >
               Потеря льготы обойдётся в <b>{formatRub(slip.slipLoss)}</b> к горизонту: столько
               капитала съест рыночная ставка {slip.marketRate.toFixed(1)}% по сравнению со
@@ -221,9 +249,20 @@ export const InsightsSection = memo(function InsightsSection() {
               color="green"
               title="Когда слёт перестанет быть страшным"
             >
-              Начиная с <b>месяца {safetyMonth}</b> (через {formatMonths(safetyMonth)}) накоплений
-              достаточно, чтобы при слёте — после внесения их в долг — платёж не превысил льготный
-              уровень {formatRub(minPayment)}/мес.
+              {hasHistory ? (
+                <>
+                  Через <b>{formatMonths(safetyMonth)}</b> ({safetyMonth}-й месяц от сегодня,{' '}
+                  {todayMonth + safetyMonth}-й месяц ипотеки) накоплений достаточно, чтобы при
+                  слёте — после внесения их в долг — платёж не превысил льготный уровень{' '}
+                  {formatRub(minPayment)}/мес.
+                </>
+              ) : (
+                <>
+                  Начиная с <b>месяца {safetyMonth}</b> (через {formatMonths(safetyMonth)})
+                  накоплений достаточно, чтобы при слёте — после внесения их в долг — платёж не
+                  превысил льготный уровень {formatRub(minPayment)}/мес.
+                </>
+              )}
             </InsightCard>
           ) : (
             <InsightCard
@@ -236,6 +275,17 @@ export const InsightsSection = memo(function InsightsSection() {
               взносом.
             </InsightCard>
           ))}
+
+        {/* Сколько уже пройдено — только в режиме ипотеки с историей (§6 дизайна таймлайна) */}
+        {hasHistory && history && (
+          <InsightCard icon={<IconHistory size={18} />} color="grape" title="Сколько уже пройдено">
+            За {formatMonths(todayMonth)} по этой ипотеке погашено{' '}
+            <b>{formatRub(Math.max(0, history[0] - (history.at(-1) ?? 0)))}</b> тела кредита из{' '}
+            <b>{formatRub(history[0])}</b> и уплачено{' '}
+            <b>{formatRub(linkedMortgage?.paidInterest ?? 0)}</b> процентов. Осталось{' '}
+            <b>{formatRub(history.at(-1) ?? 0)}</b>.
+          </InsightCard>
+        )}
       </Stack>
     </Paper>
   )

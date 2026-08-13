@@ -42,13 +42,21 @@ public static class ProfileEndpoints
         return Results.Ok(ToResponse(row, repo));
     }
 
-    /// <summary>Строки нет (пользователь ещё не сохранял) → <c>200 { version: 1, settings: null, updatedAt: null }</c>, не 404.</summary>
+    /// <summary>
+    /// Строки нет (пользователь ещё не сохранял) → <c>200 { version: 2, settings: null, updatedAt: null }</c>,
+    /// не 404. Версия 2 — фронт всегда шлёт её (spec §7.1 mortgage-timeline-design).
+    /// </summary>
     private static UserSettingsResponse ToResponse(UserSettingsRow? row, UserSettingsRepository repo)
     {
         if (row is null)
-            return new UserSettingsResponse(1, null, null);
+            return new UserSettingsResponse(2, null, null);
 
         var settings = repo.Deserialize(row.Data);
+        // startingSavings в JSON-колонке nullable: строки, записанные версией 1 (без этого поля),
+        // читаются как null и нормализуются в 0 при отдаче (spec §7.1) — миграция данных не нужна.
+        if (settings is { StartingSavings: null })
+            settings = settings with { StartingSavings = 0 };
+
         return new UserSettingsResponse(row.Version, settings, DateTime.SpecifyKind(row.UpdatedAt, DateTimeKind.Utc));
     }
 

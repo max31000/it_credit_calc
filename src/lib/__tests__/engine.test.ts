@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { calculate, calcPMT } from '../engine'
+import { calculate, calcPMT, refundToBase } from '../engine'
 import type { MortgageParams } from '../engine'
 
 // ─── Фабрика параметров по умолчанию ───────────────────────────────────────
@@ -16,6 +16,9 @@ const defaultParams = (): MortgageParams => ({
   keyRate: 16,
   bankDiscount: 0.5,
   salary: null,
+  startingSavings: 0,
+  usedPropertyBase: 0,
+  usedInterestBase: 0,
 })
 
 const noSlip = (): MortgageParams => ({ ...defaultParams(), slipMonth: 0 })
@@ -369,5 +372,81 @@ describe('числовые инварианты', () => {
 
   it('calcPMT: 5 500 000 под 6% на 240 мес ≈ 39 404', () => {
     expect(calcPMT(5_500_000, 0.005, 240)).toBeCloseTo(39_404, -1)
+  })
+})
+
+// ─── 8. Стартовые накопления (§1.6, §3.1, §9 дизайна) ──────────────────────
+describe('стартовые накопления', () => {
+  it('гостевой сценарий (startingSavings = 0): дампа в месяц 0 нет, стартовая позиция прежняя', () => {
+    const result = calculate(noSlip())
+    // Ни одна стратегия не стартует с деньгами, prepay ничего не вносит в долг в месяц 0 —
+    // ровно то поведение, что было до появления startingSavings (инвариант §9.1 дизайна).
+    expect(result.series[0].savingsSave).toBe(0)
+    expect(result.series[0].savingsPrepay).toBe(0)
+    expect(result.series[0].debtPrepay).toBe(result.loanAmount)
+    expect(result.series[0].debtSave).toBe(result.loanAmount)
+    expect(result.series[0].netWorthPrepay).toBe(-result.loanAmount)
+    expect(result.summary.prepay.debtFreeMonth).not.toBe(0)
+    expect(result.payoffMonth).not.toBe(0)
+  })
+
+  it('series[0].netWorthPrepay === series[0].netWorthSave при любых startingSavings', () => {
+    const params: MortgageParams = { ...defaultParams(), startingSavings: 1_500_000 }
+    const result = calculate(params)
+    expect(result.series[0].netWorthPrepay).toBe(result.series[0].netWorthSave)
+  })
+
+  it('startingSavings > loanAmount → закрытие долга уже в месяц 0', () => {
+    const base = calculate(noSlip())
+    const params: MortgageParams = {
+      ...noSlip(),
+      startingSavings: base.loanAmount + 1_000_000,
+    }
+    const result = calculate(params)
+    expect(result.summary.prepay.debtFreeMonth).toBe(0)
+    expect(result.payoffMonth).toBe(0)
+    expect(result.series[0].debtPrepay).toBe(0)
+  })
+})
+
+// ─── 9. Использованные базы вычетов (§3.2, §9 дизайна) ─────────────────────
+describe('использованные базы вычетов', () => {
+  it('usedPropertyBase = 2 000 000 → имущественный вычет не начисляется', () => {
+    const result = calculate({ ...noSlip(), salary: 300_000, usedPropertyBase: 2_000_000 })
+    expect(result.tax!.propertyReturnTotal).toBe(0)
+    expect(result.tax!.propertyBaseStart).toBe(0)
+  })
+
+  it('usedInterestBase = 3 000 000 → процентный вычет не начисляется', () => {
+    const result = calculate({ ...noSlip(), salary: 300_000, usedInterestBase: 3_000_000 })
+    expect(result.tax!.interestReturnTotal).toBe(0)
+    expect(result.tax!.interestBaseStart).toBe(0)
+  })
+
+  it('usedPropertyBase частично (700 000) → возврат меньше полного, но больше нуля', () => {
+    const full = calculate({ ...noSlip(), salary: 300_000 })
+    const partial = calculate({ ...noSlip(), salary: 300_000, usedPropertyBase: 700_000 })
+    expect(partial.tax!.propertyReturnTotal).toBeGreaterThan(0)
+    expect(partial.tax!.propertyReturnTotal).toBeLessThan(full.tax!.propertyReturnTotal)
+  })
+})
+
+// ─── 10. refundToBase (§3.4 дизайна) ────────────────────────────────────────
+describe('refundToBase', () => {
+  it('refundToBase(260_000, null) === 2_000_000 (13%)', () => {
+    expect(refundToBase(260_000, null)).toBeCloseTo(2_000_000, 5)
+  })
+
+  it('высокая зарплата (верхняя ступень шкалы) даёт базу меньше, чем 13%', () => {
+    const refund = 260_000
+    const baseAt13 = refundToBase(refund, null)
+    const baseAtHighSalary = refundToBase(refund, 5_000_000) // 60М/год → верхние ступени
+    expect(baseAtHighSalary).toBeLessThan(baseAt13)
+  })
+
+  it('refundToBase(0, ...) === 0, отрицательные и нечисловые значения тоже дают 0', () => {
+    expect(refundToBase(0, null)).toBe(0)
+    expect(refundToBase(-100, null)).toBe(0)
+    expect(refundToBase(NaN, null)).toBe(0)
   })
 })

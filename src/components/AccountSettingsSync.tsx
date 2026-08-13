@@ -16,12 +16,14 @@ function accountSettingsEqual(a: AccountSettings, b: AccountSettings): boolean {
 }
 
 /**
- * Синхронизация шести полей аккаунта (С3, §5.3 спеки docs/specs/2026-08-12-tracker-ux-design.md)
+ * Синхронизация полей аккаунта из `ACCOUNT_SETTING_KEYS` (С3, §5.3 спеки
+ * docs/specs/2026-08-12-tracker-ux-design.md; §2.6 дизайна таймлайна добавил седьмое —
+ * `startingSavings`)
  * с сервером. Компонент без разметки — монтируется в `Shell` (`src/App.tsx`).
  *
  * Работает только при `TRACKER_ENABLED && isAuthenticated` (иначе — ни одного запроса, G12).
  * При смене `user.id`: GET → `settings === null` сеет PUT из ownParams, иначе сервер побеждает
- * (applyAccountSettings). При изменении любого из шести полей — дебаунс 800 мс → PUT.
+ * (applyAccountSettings). При изменении любого из этих полей — дебаунс 800 мс → PUT.
  */
 export function AccountSettingsSync() {
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated())

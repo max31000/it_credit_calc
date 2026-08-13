@@ -5,6 +5,7 @@ import { useCalculatorStore } from '../../store/useCalculatorStore'
 import { SliderInput } from '../controls/SliderInput'
 import { NumericInput } from '../controls/NumericInput'
 import { InfoTooltip } from '../controls/InfoTooltip'
+import { DeductionsBlock } from '../calculator/DeductionsBlock'
 import { relinkLoan } from '../../lib/loanLink'
 import { formatRub, formatPct } from '../../lib/formatters'
 
@@ -182,6 +183,32 @@ export const ParamsSection = memo(function ParamsSection() {
         <Stack gap="lg">
           <Stack gap={4}>
             <SliderInput
+              label="Текущие накопления"
+              value={params.startingSavings}
+              min={0}
+              max={5_000_000}
+              step={50_000}
+              inputMax={100_000_000}
+              onChange={(v) => setParam('startingSavings', v)}
+              format={formatRub}
+              suffix=" ₽"
+              tooltip="Деньги, которые у вас уже есть сверх кредита. Подход «копить» оставит их на вкладе, подход «гасить досрочно» внесёт в долг сразу — стартовый капитал у обоих подходов одинаков, сравнение честное."
+              marks={[
+                { value: 0, label: '0' },
+                { value: 1_500_000, label: '1,5М' },
+                { value: 3_000_000, label: '3М' },
+                { value: 5_000_000, label: '5М' },
+              ]}
+            />
+            {params.startingSavings >= loanAmount && loanAmount > 0 && (
+              <Alert color="green" variant="light">
+                Накоплений уже хватает, чтобы закрыть остаток долга целиком.
+              </Alert>
+            )}
+          </Stack>
+
+          <Stack gap={4}>
+            <SliderInput
               label="Бюджет на ипотеку в месяц"
               value={params.freeMonthly}
               min={20_000}
@@ -285,6 +312,13 @@ export const ParamsSection = memo(function ParamsSection() {
                 {formatRub(result.tax.propertyReturnTotal + result.tax.interestReturnTotal)}
               </Text>
             )}
+          </Box>
+
+          <Box>
+            <Text size="sm" fw={500} mb={4}>
+              Налоговые вычеты (уже полученные)
+            </Text>
+            <DeductionsBlock />
           </Box>
         </Stack>
       </SimpleGrid>
