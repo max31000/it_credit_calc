@@ -16,6 +16,7 @@ import { TRACKER_ENABLED, ApiError } from './api/client'
 import { useAuthStore } from './store/useAuthStore'
 import { useCalculatorStore } from './store/useCalculatorStore'
 import { fetchMe } from './api/auth'
+import { useShellSync } from './hooks/useShellSync'
 
 /** Общая шапка + контейнер для всех страниц. AccountSettingsSync без разметки —
  *  сам решает, делать ли запросы (TRACKER_ENABLED && isAuthenticated, G12). */
@@ -33,6 +34,7 @@ function AppRoutes() {
   const token = useAuthStore((s) => s.token)
   const logout = useAuthStore((s) => s.logout)
   const exitMortgageMode = useCalculatorStore((s) => s.exitMortgageMode)
+  useShellSync('credit_calc')
 
   // Проверка сессии на старте: если токен невалиден/истёк, GET /api/auth/me вернёт 401 →
   // разлогиниваем. Сетевые и прочие ошибки (сервер недоступен и т.п.) сессию не трогают —
