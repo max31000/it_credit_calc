@@ -52,7 +52,7 @@ function AppRoutes() {
   }, [token, logout, exitMortgageMode])
 
   if (!TRACKER_ENABLED) {
-    // GitHub Pages: трекер полностью скрыт, /tracker* и /login недоступны
+    // Сборка без VITE_API_BASE: трекер полностью скрыт, /tracker* и /login недоступны
     return (
       <Routes>
         <Route element={<Shell />}>
