@@ -91,6 +91,10 @@ builder.Services.ConfigureHttpJsonOptions(options =>
 
 var app = builder.Build();
 
+// Fail-fast: вне Development/Testing не стартуем с пустым/коротким/закоммиченным dev-секретом.
+// Проверяем после Build(), чтобы учесть все источники конфигурации (env vars, переопределения в тестах).
+JwtSecretGuard.Validate(app.Environment, app.Configuration["Jwt:Secret"]);
+
 // Единый формат ошибок для необработанных исключений — должен оборачивать весь остальной
 // конвейер, иначе исключения дальше по цепочке в него не попадут.
 app.UseMiddleware<ErrorHandlingMiddleware>();
