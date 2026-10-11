@@ -186,6 +186,14 @@ jobs:
           envs: GHCR_PAT,JWT_SECRET,MYSQL_ROOT_PASSWORD,MYSQL_PASSWORD,TELEGRAM_BOT_TOKEN
           script: |
             set -e
+            # Pre-flight: refuse to replace the running container with one that will crash on start.
+            [ ${#JWT_SECRET} -ge 32 ] || { echo "JWT_SECRET missing or shorter than 32 chars - refusing to deploy"; exit 1; }
+            # Mirror JwtSecretGuard: reject whitespace-only, anything containing "dev-secret" (case-insensitive)
+            # and the committed credit_calc dev value. Never print the value itself.
+            [ -n "$(printf '%s' "$JWT_SECRET" | tr -d '[:space:]')" ] || { echo "JWT_SECRET is blank - refusing to deploy"; exit 1; }
+            if printf '%s' "$JWT_SECRET" | grep -qi 'dev-secret' || [ "$JWT_SECRET" = "dev-only-secret-key-do-not-use-in-prod-32chars" ]; then
+              echo "JWT_SECRET is a known development value - refusing to deploy"; exit 1
+            fi
             cd /opt/credit_calc
             umask 077
             cat > .env <<EOF

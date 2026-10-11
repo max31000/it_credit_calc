@@ -140,4 +140,53 @@ public class TelegramAuthServiceTests
 
         svc.ValidateAuthData(data).Should().BeTrue();
     }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    public void NullOrEmptyHash_ReturnsFalse(string? hash)
+    {
+        var svc = CreateService();
+
+        var data = new TelegramAuthData
+        {
+            Id = 123456789,
+            AuthDate = FreshAuthDate(),
+            Hash = hash!,
+        };
+
+        svc.ValidateAuthData(data).Should().BeFalse();
+    }
+
+    [Fact]
+    public void FutureAuthDate_BeyondSkew_ReturnsFalse()
+    {
+        var svc = CreateService();
+
+        var data = new TelegramAuthData
+        {
+            Id = 123456789,
+            AuthDate = DateTimeOffset.UtcNow.ToUnixTimeSeconds() + 3600,
+            Hash = string.Empty,
+        };
+        data = data with { Hash = ComputeHash(data) };
+
+        svc.ValidateAuthData(data).Should().BeFalse();
+    }
+
+    [Fact]
+    public void FutureAuthDate_WithinSkew_ReturnsTrue()
+    {
+        var svc = CreateService();
+
+        var data = new TelegramAuthData
+        {
+            Id = 123456789,
+            AuthDate = DateTimeOffset.UtcNow.ToUnixTimeSeconds() + 30,
+            Hash = string.Empty,
+        };
+        data = data with { Hash = ComputeHash(data) };
+
+        svc.ValidateAuthData(data).Should().BeTrue();
+    }
 }
