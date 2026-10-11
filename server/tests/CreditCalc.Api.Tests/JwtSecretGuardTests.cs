@@ -24,7 +24,10 @@ public class JwtSecretGuardTests
     [InlineData("")]
     [InlineData("   ")]
     [InlineData("too-short-secret")]
-    [InlineData(JwtSecretGuard.CommittedDevSecret)]
+    [InlineData("dev-secret-change-in-production-min-32-chars!!")]
+    [InlineData("dev-secret-change-me-min-32-characters!!")]
+    [InlineData("dev-only-secret-key-do-not-use-in-prod-32chars")]
+    [InlineData("prod-but-still-a-DEV-SECRET-0123456789abcdef")]
     public void Production_WithWeakSecret_Throws(string? secret)
     {
         var act = () => JwtSecretGuard.Validate(new Env("Production"), secret);
@@ -53,10 +56,12 @@ public class JwtSecretGuardTests
     [Fact]
     public void App_InProductionWithCommittedDevSecret_FailsToStart()
     {
-        // appsettings.Production.json не задаёт Jwt:Secret, поэтому действует dev-значение
-        // из appsettings.json — guard должен уронить старт до миграций.
+        // Dev-секрет задаём явно, чтобы тест не зависел от окружения (Jwt__Secret в env CI/машины):
+        // guard должен уронить старт до миграций.
         using var factory = new WebApplicationFactory<Program>()
-            .WithWebHostBuilder(b => b.UseEnvironment("Production"));
+            .WithWebHostBuilder(b => b
+                .UseEnvironment("Production")
+                .UseSetting("Jwt:Secret", JwtSecretGuard.CommittedDevSecret));
 
         var act = () => factory.CreateClient();
 
