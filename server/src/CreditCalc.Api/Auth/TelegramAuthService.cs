@@ -12,7 +12,7 @@ namespace CreditCalc.Api.Auth;
 /// 2. Оставшиеся поля сортируем по алфавиту и объединяем через \n.
 /// 3. secret_key = SHA256(bot_token).
 /// 4. Проверяем: HMAC-SHA256(data_check_string, secret_key) == hash.
-/// 5. Проверяем, что auth_date не старше 24 часов.
+/// 5. Проверяем, что auth_date не старше 24 часов и не больше чем на 60 с в будущем.
 ///
 /// В отличие от bonds здесь НЕТ allowlist (Telegram:OwnerId) — сервис мультипользовательский,
 /// любой пользователь Telegram логинится и ведёт свои ипотеки (spec §3.1).
@@ -32,9 +32,17 @@ public class TelegramAuthService
 
     public bool ValidateAuthData(TelegramAuthData data)
     {
-        // 1. Проверяем свежесть данных (не старше 24 часов)
+        // 0. Без подписи проверять нечего: null/пустой hash (в т.ч. "hash": null в JSON) —
+        //    штатный отказ (401), а не NullReferenceException → 500.
+        if (string.IsNullOrEmpty(data.Hash))
+            return false;
+
+        // 1. Проверяем свежесть данных: не старше 24 часов и не из будущего
+        //    (допуск 60 с на рассинхрон часов).
         var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
         if (now - data.AuthDate > 86400)
+            return false;
+        if (data.AuthDate > now + 60)
             return false;
 
         // 2. Строим data_check_string: все поля кроме hash, отсортированные по ключу, через \n
