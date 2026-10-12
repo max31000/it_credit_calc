@@ -1,4 +1,5 @@
 using Dapper;
+using MySqlConnector;
 
 namespace CreditCalc.Api.Data;
 
@@ -15,7 +16,16 @@ public class User
     public DateTime UpdatedAt { get; set; }
 }
 
-public class UserRepository
+/// <summary>Минимальный контракт хранилища пользователей для провижининга (подменяется в тестах).</summary>
+public interface IUserStore
+{
+    Task<User?> GetByTelegramIdAsync(long telegramId);
+
+    /// <summary>Создаёт пользователя; <c>null</c>, если <c>telegram_id</c> уже занят (MySQL 1062, гонка вставок).</summary>
+    Task<ulong?> TryCreateAsync(User user);
+}
+
+public class UserRepository : IUserStore
 {
     private readonly Db _db;
 
@@ -50,13 +60,16 @@ public class UserRepository
             user);
     }
 
-    public async Task UpdateAsync(User user)
+    public async Task<ulong?> TryCreateAsync(User user)
     {
-        await using var connection = _db.Create();
-        await connection.ExecuteAsync(
-            @"UPDATE users
-              SET username = @Username, first_name = @FirstName, last_name = @LastName, photo_url = @PhotoUrl
-              WHERE id = @Id",
-            user);
+        try
+        {
+            return await CreateAsync(user);
+        }
+        catch (MySqlException ex) when (ex.ErrorCode == MySqlErrorCode.DuplicateKeyEntry)
+        {
+            // uq_users_telegram_id: параллельный запрос того же пользователя вставил строку первым.
+            return null;
+        }
     }
 }

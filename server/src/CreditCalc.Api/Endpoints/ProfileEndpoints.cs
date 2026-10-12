@@ -1,4 +1,3 @@
-using System.Security.Claims;
 using CreditCalc.Api.Auth;
 using CreditCalc.Api.Contracts;
 using CreditCalc.Api.Data;
@@ -8,8 +7,8 @@ namespace CreditCalc.Api.Endpoints;
 /// <summary>
 /// GET/PUT /api/profile/settings — шесть настроек аккаунта одной строкой на пользователя
 /// (spec §4.1, §5.2). Защищён через <c>FallbackPolicy</c> (явный <c>RequireAuthorization()</c>
-/// не нужен). userId — только из <see cref="ClaimsPrincipal"/>; чужие настройки недостижимы,
-/// ключ в SQL — <c>user_id</c> из JWT.
+/// не нужен). userId — только через <see cref="ICurrentUser"/> (по claim <c>tg</c>); чужие настройки недостижимы,
+/// ключ в SQL — локальный <c>user_id</c>.
 /// </summary>
 public static class ProfileEndpoints
 {
@@ -21,17 +20,17 @@ public static class ProfileEndpoints
         group.MapPut("/settings", PutSettings);
     }
 
-    private static async Task<IResult> GetSettings(ClaimsPrincipal principal, UserSettingsRepository repo)
+    private static async Task<IResult> GetSettings(ICurrentUser currentUser, UserSettingsRepository repo)
     {
-        var userId = RequireUserId(principal);
+        var userId = await currentUser.GetLocalUserIdAsync();
         var row = await repo.GetAsync(userId);
         return Results.Ok(ToResponse(row, repo));
     }
 
     private static async Task<IResult> PutSettings(
-        ClaimsPrincipal principal, UserSettingsRequest request, UserSettingsRepository repo)
+        ICurrentUser currentUser, UserSettingsRequest request, UserSettingsRepository repo)
     {
-        var userId = RequireUserId(principal);
+        var userId = await currentUser.GetLocalUserIdAsync();
 
         var error = request.Validate();
         if (error is not null)
@@ -59,12 +58,4 @@ public static class ProfileEndpoints
 
         return new UserSettingsResponse(row.Version, settings, DateTime.SpecifyKind(row.UpdatedAt, DateTimeKind.Utc));
     }
-
-    /// <summary>
-    /// userId берётся только из ClaimsPrincipal (spec §5.5, как в MortgageEndpoints). FallbackPolicy
-    /// гарантирует аутентификацию раньше вызова хендлера, поэтому claim здесь всегда присутствует —
-    /// исключение не должно быть достижимо в проде, это защитная мера на случай ошибки конфигурации.
-    /// </summary>
-    private static ulong RequireUserId(ClaimsPrincipal principal) =>
-        JwtIssuer.GetUserId(principal) ?? throw new InvalidOperationException("userId отсутствует в токене");
 }

@@ -9,6 +9,9 @@
   <ItemGroup>
     <PackageReference Include="Dapper" Version="2.1.35" />
     <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="8.0.11" />
+    <!-- Одна версия IdentityModel на всё решение (Auth/Mvv42Auth.cs, docs/migration.md в mvv42-auth):
+         JwtBearer 8.0.11 тянет 7.1.2, пиним OpenIdConnect к версии System.IdentityModel.Tokens.Jwt. -->
+    <PackageReference Include="Microsoft.IdentityModel.Protocols.OpenIdConnect" Version="7.6.3" />
     <PackageReference Include="MySqlConnector" Version="2.3.5" />
     <PackageReference Include="Swashbuckle.AspNetCore" Version="6.8.1" />
     <PackageReference Include="System.IdentityModel.Tokens.Jwt" Version="7.6.3" />

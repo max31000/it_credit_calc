@@ -1,4 +1,3 @@
-using System.Security.Claims;
 using CreditCalc.Api.Auth;
 using CreditCalc.Api.Contracts;
 using CreditCalc.Api.Data;
@@ -32,9 +31,9 @@ public static class MortgageEndpoints
     /// группировка <c>ToLookup</c> в памяти. Порядок ипотек прежний, событий — occurred_on ASC, id ASC.
     /// </summary>
     private static async Task<IResult> ListMortgages(
-        ClaimsPrincipal principal, MortgageRepository mortgageRepo, MortgageEventRepository eventRepo)
+        ICurrentUser currentUser, MortgageRepository mortgageRepo, MortgageEventRepository eventRepo)
     {
-        var userId = RequireUserId(principal);
+        var userId = await currentUser.GetLocalUserIdAsync();
 
         var mortgages = await mortgageRepo.ListAsync(userId);
         var events = await eventRepo.ListAllByUserAsync(userId);
@@ -46,9 +45,9 @@ public static class MortgageEndpoints
         return Results.Ok(result);
     }
 
-    private static async Task<IResult> CreateMortgage(ClaimsPrincipal principal, MortgageRequest request, MortgageRepository repo)
+    private static async Task<IResult> CreateMortgage(ICurrentUser currentUser, MortgageRequest request, MortgageRepository repo)
     {
-        var userId = RequireUserId(principal);
+        var userId = await currentUser.GetLocalUserIdAsync();
 
         var error = request.Validate();
         if (error is not null)
@@ -60,9 +59,9 @@ public static class MortgageEndpoints
     }
 
     private static async Task<IResult> GetMortgage(
-        ClaimsPrincipal principal, ulong id, MortgageRepository mortgageRepo, MortgageEventRepository eventRepo)
+        ICurrentUser currentUser, ulong id, MortgageRepository mortgageRepo, MortgageEventRepository eventRepo)
     {
-        var userId = RequireUserId(principal);
+        var userId = await currentUser.GetLocalUserIdAsync();
 
         var mortgage = await mortgageRepo.GetAsync(userId, id);
         if (mortgage is null)
@@ -73,9 +72,9 @@ public static class MortgageEndpoints
     }
 
     private static async Task<IResult> UpdateMortgage(
-        ClaimsPrincipal principal, ulong id, MortgageRequest request, MortgageRepository repo)
+        ICurrentUser currentUser, ulong id, MortgageRequest request, MortgageRepository repo)
     {
-        var userId = RequireUserId(principal);
+        var userId = await currentUser.GetLocalUserIdAsync();
 
         var error = request.Validate();
         if (error is not null)
@@ -88,16 +87,16 @@ public static class MortgageEndpoints
         return Results.Ok(ToDto(updated));
     }
 
-    private static async Task<IResult> DeleteMortgage(ClaimsPrincipal principal, ulong id, MortgageRepository repo)
+    private static async Task<IResult> DeleteMortgage(ICurrentUser currentUser, ulong id, MortgageRepository repo)
     {
-        var userId = RequireUserId(principal);
+        var userId = await currentUser.GetLocalUserIdAsync();
         var deleted = await repo.DeleteAsync(userId, id);
         return deleted ? Results.NoContent() : MortgageNotFound();
     }
 
-    private static async Task<IResult> ListEvents(ClaimsPrincipal principal, ulong id, MortgageEventRepository repo)
+    private static async Task<IResult> ListEvents(ICurrentUser currentUser, ulong id, MortgageEventRepository repo)
     {
-        var userId = RequireUserId(principal);
+        var userId = await currentUser.GetLocalUserIdAsync();
         var events = await repo.ListAsync(userId, id);
         if (events is null)
             return MortgageNotFound();
@@ -106,13 +105,13 @@ public static class MortgageEndpoints
     }
 
     private static async Task<IResult> CreateEvent(
-        ClaimsPrincipal principal,
+        ICurrentUser currentUser,
         ulong id,
         MortgageEventRequest request,
         MortgageRepository mortgageRepo,
         MortgageEventRepository eventRepo)
     {
-        var userId = RequireUserId(principal);
+        var userId = await currentUser.GetLocalUserIdAsync();
 
         var mortgage = await mortgageRepo.GetAsync(userId, id);
         if (mortgage is null)
@@ -129,22 +128,14 @@ public static class MortgageEndpoints
         return Results.Created($"/api/mortgages/{id}/events/{created.Id}", ToDto(created));
     }
 
-    private static async Task<IResult> DeleteEvent(ClaimsPrincipal principal, ulong id, ulong eventId, MortgageEventRepository repo)
+    private static async Task<IResult> DeleteEvent(ICurrentUser currentUser, ulong id, ulong eventId, MortgageEventRepository repo)
     {
-        var userId = RequireUserId(principal);
+        var userId = await currentUser.GetLocalUserIdAsync();
         var deleted = await repo.DeleteAsync(userId, id, eventId);
         return deleted
             ? Results.NoContent()
             : Results.Json(new { error = "Событие не найдено" }, statusCode: StatusCodes.Status404NotFound);
     }
-
-    /// <summary>
-    /// userId берётся только из ClaimsPrincipal (spec §5.5). FallbackPolicy гарантирует
-    /// аутентификацию раньше вызова хендлера, поэтому claim здесь всегда присутствует —
-    /// исключение не должно быть достижимо в проде, это защитная мера на случай ошибки конфигурации.
-    /// </summary>
-    private static ulong RequireUserId(ClaimsPrincipal principal) =>
-        JwtIssuer.GetUserId(principal) ?? throw new InvalidOperationException("userId отсутствует в токене");
 
     private static IResult MortgageNotFound() =>
         Results.Json(new { error = "Ипотека не найдена" }, statusCode: StatusCodes.Status404NotFound);
