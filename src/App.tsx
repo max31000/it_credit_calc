@@ -86,6 +86,8 @@ function AppRoutes() {
  *  Popover закрывается при отрыве таргета (8.x). */
 const theme = createTheme({
   defaultRadius: 'sm',
+  // v9 raised the medium weight 500 -> 600; keep the v7 look.
+  fontWeights: { medium: '500' },
   components: {
     Switch: Switch.extend({ defaultProps: { withThumbIndicator: false } }),
     Popover: Popover.extend({ defaultProps: { hideDetached: false } }),
