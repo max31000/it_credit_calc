@@ -1,5 +1,10 @@
 name: Deploy to VDS
 
+# Один workflow: backend (тесты → образ → деплой → health) → frontend (needs: backend).
+# Path-фильтр: изменился только фронт — backend пропускается, needs удовлетворён (spec §10.3, addendum E).
+# Образы пушатся только как sha-<commit> и запускаются по этому тегу; контейнеры с меткой
+# com.centurylinklabs.watchtower.enable=false — watchtower их не трогает.
+
 on:
   push:
     branches: [master]
@@ -7,36 +12,58 @@ on:
 
 concurrency:
   group: deploy-credit-calc
-  cancel-in-progress: true
+  cancel-in-progress: false
+
+env:
+  TAG: sha-${{ github.sha }}
+  WEB_IMAGE: ghcr.io/max31000/it_credit_calc
+  API_IMAGE: ghcr.io/max31000/it_credit_calc-api
 
 jobs:
-  test-web:
-    name: Test (web)
+  changes:
+    name: Detect changes
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      # workflow_dispatch деплоит обе части
+      backend: ${{ github.event_name == 'workflow_dispatch' && 'true' || steps.filter.outputs.backend }}
+      frontend: ${{ github.event_name == 'workflow_dispatch' && 'true' || steps.filter.outputs.frontend }}
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
         with:
-          node-version: '20'
-          cache: 'npm'
+          filters: |
+            backend:
+              - 'server/**'
+              - 'deploy/**'
+              - '.github/workflows/deploy.yml'
+            frontend:
+              - 'src/**'
+              - 'public/**'
+              - 'index.html'
+              - 'package.json'
+              - 'package-lock.json'
+              - 'vite.config.ts'
+              - 'tsconfig*.json'
+              - 'eslint.config.js'
+              - 'nginx.conf'
+              - 'Dockerfile'
+              - '.dockerignore'
+              - 'deploy/**'
+              - '.github/workflows/deploy.yml'
 
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Run tests
-        run: npm run test -- --run
-
-      - name: Type check
-        run: npm run typecheck
-
-      - name: Lint
-        run: npm run lint
-
-  test-api:
-    name: Test (api)
+  backend:
+    name: Backend (test, image, deploy)
     runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.backend == 'true'
+    permissions:
+      contents: read
+      packages: write
     steps:
       - uses: actions/checkout@v4
 
@@ -62,21 +89,6 @@ jobs:
       - name: Test
         run: dotnet test server/CreditCalc.sln -c Release --no-build
 
-  build-web:
-    name: Build & Push Docker image (web)
-    runs-on: ubuntu-latest
-    needs: [test-web, test-api]
-    if: github.ref == 'refs/heads/master'
-    permissions:
-      contents: read
-      packages: write
-
-    outputs:
-      image_tag: ${{ steps.meta.outputs.tags }}
-
-    steps:
-      - uses: actions/checkout@v4
-
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -87,77 +99,16 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Extract metadata
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ghcr.io/max31000/it_credit_calc
-          tags: |
-            type=raw,value=latest
-            type=sha,prefix=sha-
-
-      - name: Build and push
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          build-args: |
-            VITE_API_BASE=/credit_calc/api
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
-  build-api:
-    name: Build & Push Docker image (api)
-    runs-on: ubuntu-latest
-    needs: [test-web, test-api]
-    if: github.ref == 'refs/heads/master'
-    permissions:
-      contents: read
-      packages: write
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Extract metadata
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ghcr.io/max31000/it_credit_calc-api
-          tags: |
-            type=raw,value=latest
-            type=sha,prefix=sha-
-
-      - name: Build and push
+      - name: Build and push (sha tag only)
         uses: docker/build-push-action@v5
         with:
           context: ./server
           file: server/Dockerfile
           push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
-  deploy:
-    name: Deploy to VDS
-    runs-on: ubuntu-latest
-    needs: [build-web, build-api]
-    if: github.ref == 'refs/heads/master'
-
-    steps:
-      - uses: actions/checkout@v4
+          tags: ${{ env.API_IMAGE }}:${{ env.TAG }}
+          labels: com.centurylinklabs.watchtower.enable=false
+          cache-from: type=gha,scope=api
+          cache-to: type=gha,mode=max,scope=api
 
       - name: Copy compose file to VDS
         uses: appleboy/scp-action@v0.1.7
@@ -170,50 +121,134 @@ jobs:
           target: "/opt/credit_calc/"
           strip_components: 1
 
-      - name: Deploy via SSH
+      - name: Deploy API via SSH
         uses: appleboy/ssh-action@v1
         env:
           GHCR_PAT: ${{ secrets.GHCR_PAT }}
-          JWT_SECRET: ${{ secrets.JWT_SECRET }}
           MYSQL_ROOT_PASSWORD: ${{ secrets.MYSQL_ROOT_PASSWORD }}
           MYSQL_PASSWORD: ${{ secrets.MYSQL_PASSWORD }}
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TAG: ${{ env.TAG }}
         with:
           host: ${{ secrets.VDS_HOST }}
           username: ${{ secrets.VDS_USER }}
           key: ${{ secrets.VDS_SSH_PRIVATE_KEY }}
           port: 22
-          envs: GHCR_PAT,JWT_SECRET,MYSQL_ROOT_PASSWORD,MYSQL_PASSWORD,TELEGRAM_BOT_TOKEN
+          envs: GHCR_PAT,MYSQL_ROOT_PASSWORD,MYSQL_PASSWORD,TAG
           script: |
             set -e
-            # Pre-flight: refuse to replace the running container with one that will crash on start.
-            [ ${#JWT_SECRET} -ge 32 ] || { echo "JWT_SECRET missing or shorter than 32 chars - refusing to deploy"; exit 1; }
-            # Mirror JwtSecretGuard: reject whitespace-only, anything containing "dev-secret" (case-insensitive)
-            # and the committed credit_calc dev value. Never print the value itself.
-            [ -n "$(printf '%s' "$JWT_SECRET" | tr -d '[:space:]')" ] || { echo "JWT_SECRET is blank - refusing to deploy"; exit 1; }
-            if printf '%s' "$JWT_SECRET" | grep -qi 'dev-secret' || [ "$JWT_SECRET" = "dev-only-secret-key-do-not-use-in-prod-32chars" ]; then
-              echo "JWT_SECRET is a known development value - refusing to deploy"; exit 1
-            fi
             cd /opt/credit_calc
             umask 077
             cat > .env <<EOF
-            JWT_SECRET=${JWT_SECRET}
             MYSQL_ROOT_PASSWORD=${MYSQL_ROOT_PASSWORD}
             MYSQL_PASSWORD=${MYSQL_PASSWORD}
-            TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
             EOF
             chmod 600 .env
             echo "${GHCR_PAT}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
-            # Одноразовая миграция с docker run на compose: старый контейнер credit_calc
-            # (без compose-метки) занимает имя — удаляем только его, compose-контейнеры не трогаем.
-            if docker inspect credit_calc >/dev/null 2>&1 && [ -z "$(docker inspect credit_calc --format '{{ index .Config.Labels "com.docker.compose.project" }}')" ]; then
-              docker rm -f credit_calc
+            # credit_calc_api должен видеть mvv42-auth:8080 (JWKS) — внешняя сеть платформы.
+            docker network inspect cashpulse-network >/dev/null
+            export TAG
+            docker compose -f docker-compose.prod.yml pull credit_calc_api
+            docker compose -f docker-compose.prod.yml up -d credit_calc_api
+            # На первом деплое том MySQL пустой: инициализация занимает десятки секунд,
+            # API может упасть на миграциях и перезапуститься (restart: unless-stopped) — ретраи.
+            ok=0
+            for i in $(seq 1 30); do
+              if curl -sf http://localhost:8081/credit_calc/api/health | grep -q '"ok"'; then
+                ok=1
+                echo "api health ok after ${i} attempt(s)"
+                break
+              fi
+              sleep 5
+            done
+            if [ "$ok" -ne 1 ]; then
+              echo "api health check failed after 150s"
+              docker compose -f docker-compose.prod.yml ps
+              docker compose -f docker-compose.prod.yml logs --tail=50 credit_calc_api
+              exit 1
             fi
-            docker compose -f docker-compose.prod.yml pull
-            docker compose -f docker-compose.prod.yml up -d --remove-orphans
-            # На первом деплое том MySQL пустой: инициализация БД занимает десятки секунд,
-            # API успевает упасть на миграциях и перезапуститься (restart: unless-stopped).
-            # Поэтому health-гейт — с ретраями, а не одиночный curl после sleep 10.
+            docker image prune -f
+
+  frontend:
+    name: Frontend (test, image, deploy)
+    runs-on: ubuntu-latest
+    needs: [changes, backend]
+    if: ${{ !cancelled() && contains(fromJSON('["success","skipped"]'), needs.backend.result) && needs.changes.outputs.frontend == 'true' }}
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run tests
+        run: npm run test -- --run
+
+      - name: Type check
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push (sha tag only)
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: ${{ env.WEB_IMAGE }}:${{ env.TAG }}
+          labels: com.centurylinklabs.watchtower.enable=false
+          build-args: |
+            VITE_API_BASE=/credit_calc/api
+          cache-from: type=gha,scope=web
+          cache-to: type=gha,mode=max,scope=web
+
+      - name: Copy compose file to VDS
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.VDS_HOST }}
+          username: ${{ secrets.VDS_USER }}
+          key: ${{ secrets.VDS_SSH_PRIVATE_KEY }}
+          port: 22
+          source: "deploy/docker-compose.prod.yml"
+          target: "/opt/credit_calc/"
+          strip_components: 1
+
+      - name: Deploy web via SSH
+        uses: appleboy/ssh-action@v1
+        env:
+          GHCR_PAT: ${{ secrets.GHCR_PAT }}
+          TAG: ${{ env.TAG }}
+        with:
+          host: ${{ secrets.VDS_HOST }}
+          username: ${{ secrets.VDS_USER }}
+          key: ${{ secrets.VDS_SSH_PRIVATE_KEY }}
+          port: 22
+          envs: GHCR_PAT,TAG
+          script: |
+            set -e
+            cd /opt/credit_calc
+            echo "${GHCR_PAT}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+            export TAG
+            docker compose -f docker-compose.prod.yml pull credit_calc
+            # --no-deps: API деплоит только backend-job (его образ с этим тегом может не существовать).
+            docker compose -f docker-compose.prod.yml up -d --no-deps credit_calc
             ok=0
             for i in $(seq 1 30); do
               if curl -sf http://localhost:8081/credit_calc/ >/dev/null \
@@ -227,14 +262,18 @@ jobs:
             if [ "$ok" -ne 1 ]; then
               echo "health check failed after 150s"
               docker compose -f docker-compose.prod.yml ps
-              docker compose -f docker-compose.prod.yml logs --tail=50 credit_calc_api
+              docker compose -f docker-compose.prod.yml logs --tail=50 credit_calc
               exit 1
             fi
             docker image prune -f
 
-      - name: Notify on failure
-        if: failure()
-        run: |
+  notify:
+    name: Notify on failure
+    runs-on: ubuntu-latest
+    needs: [backend, frontend]
+    if: failure()
+    steps:
+      - run: |
           curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
             -d chat_id=${{ secrets.TELEGRAM_CHAT_ID }} \
             -d text="❌ Credit Calc deploy failed: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
