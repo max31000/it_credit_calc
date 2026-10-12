@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Stack, Button, Group, Skeleton, Alert, Text } from '@mantine/core'
+import { Page } from '@mvv42/kit'
 import { IconHome2, IconAlertTriangle, IconRefresh } from '@tabler/icons-react'
 import { useNavigate } from 'react-router-dom'
 import { notifications } from '@mantine/notifications'
@@ -11,14 +12,17 @@ import { MethodologySection } from '../components/sections/MethodologySection'
 import { MortgageModeBanner } from '../components/calculator/MortgageModeBanner'
 import { TRACKER_ENABLED, ApiError } from '../api/client'
 import { getMortgage } from '../api/mortgages'
-import { useAuthStore } from '../store/useAuthStore'
+import { useTrackerUser } from '../hooks/useTrackerUser'
 import { useCalculatorStore, linkFromMortgage } from '../store/useCalculatorStore'
 import { mortgageToParams, accountSettingsFromParams } from '../lib/mortgageToParams'
 import type { MortgageRequest } from '../api/types'
 
 export default function CalculatorPage() {
   const navigate = useNavigate()
-  const isAuthenticated = useAuthStore((s) => s.isAuthenticated())
+  const trackerUser = useTrackerUser()
+  const isAuthenticated = trackerUser.user !== null
+  const authStatus = trackerUser.status
+  const refreshMe = trackerUser.refresh
   const params = useCalculatorStore((s) => s.params)
   const result = useCalculatorStore((s) => s.result)
   const linkedMortgageId = useCalculatorStore((s) => s.linkedMortgage?.id ?? null)
@@ -43,6 +47,15 @@ export default function CalculatorPage() {
 
   // С4: актуализация из трекера при монтировании и при смене привязанной ипотеки —
   // параметры пересчитываются из свежих данных сервера, а не из снимка (§3.3 спеки).
+  // Персистированная привязка к ипотеке, но вход проверить не удалось (auth недоступен) — факт не
+  // загрузить: показываем алерт с «Повторить» / «К моим параметрам» вместо вечного скелетона.
+  // Аноним/нет доступа — режим сбрасывает AccountSettingsSync; `loading` — коротко, скелетон уместен.
+  useEffect(() => {
+    if (linkedMortgageId !== null && authStatus === 'unavailable' && factError === null) {
+      setFactError('Сервис входа недоступен — не получилось проверить аккаунт.')
+    }
+  }, [linkedMortgageId, authStatus, factError, setFactError])
+
   useEffect(() => {
     if (!TRACKER_ENABLED || !isAuthenticated || linkedMortgageId === null) return undefined
 
@@ -92,7 +105,11 @@ export default function CalculatorPage() {
   }
 
   return (
-    <Stack gap="xl">
+    <Page
+      width="wide"
+      title="Калькулятор ипотеки"
+      description="Платёж, точка полного погашения и цена слёта с льготной программы"
+    >
       <MortgageModeBanner />
 
       {failed ? (
@@ -106,6 +123,7 @@ export default function CalculatorPage() {
                 leftSection={<IconRefresh size={14} />}
                 onClick={() => {
                   setFactError(null)
+                  if (authStatus === 'unavailable') void refreshMe()
                   setRetryTick((t) => t + 1)
                 }}
               >
@@ -118,7 +136,7 @@ export default function CalculatorPage() {
           </Stack>
         </Alert>
       ) : pending ? (
-        <Stack gap="xl">
+        <Stack gap="lg">
           <Skeleton height={320} radius="md" />
           <Skeleton height={180} radius="md" />
           <Skeleton height={420} radius="md" />
@@ -144,6 +162,6 @@ export default function CalculatorPage() {
       )}
 
       <MethodologySection />
-    </Stack>
+    </Page>
   )
 }

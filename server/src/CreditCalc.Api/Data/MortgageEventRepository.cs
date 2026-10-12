@@ -35,7 +35,7 @@ public class MortgageEventRepository
     /// в <c>GET /api/mortgages</c>, чтобы список отдавался без N+1: один запрос на ипотеки,
     /// один на события, группировка в памяти. Порядок — <c>occurred_on ASC, id ASC</c>.
     /// </summary>
-    public async Task<IReadOnlyList<MortgageEvent>> ListAllByUserAsync(ulong userId)
+    public virtual async Task<IReadOnlyList<MortgageEvent>> ListAllByUserAsync(ulong userId)
     {
         await using var connection = _db.Create();
         var rows = await connection.QueryAsync<MortgageEvent>(
@@ -47,7 +47,7 @@ public class MortgageEventRepository
     }
 
     /// <summary><c>null</c> — ипотека не найдена/не принадлежит пользователю; иначе список (может быть пустым).</summary>
-    public async Task<IReadOnlyList<MortgageEvent>?> ListAsync(ulong userId, ulong mortgageId)
+    public virtual async Task<IReadOnlyList<MortgageEvent>?> ListAsync(ulong userId, ulong mortgageId)
     {
         await using var connection = _db.Create();
 
@@ -64,7 +64,7 @@ public class MortgageEventRepository
     }
 
     /// <summary><c>null</c> — ипотека не найдена/не принадлежит пользователю.</summary>
-    public async Task<MortgageEvent?> CreateAsync(ulong userId, ulong mortgageId, MortgageEventRequest request)
+    public virtual async Task<MortgageEvent?> CreateAsync(ulong userId, ulong mortgageId, MortgageEventRequest request)
     {
         await using var connection = _db.Create();
 
@@ -92,7 +92,7 @@ public class MortgageEventRepository
             new { Id = id, UserId = userId });
     }
 
-    public async Task<bool> DeleteAsync(ulong userId, ulong mortgageId, ulong eventId)
+    public virtual async Task<bool> DeleteAsync(ulong userId, ulong mortgageId, ulong eventId)
     {
         await using var connection = _db.Create();
         var rows = await connection.ExecuteAsync(

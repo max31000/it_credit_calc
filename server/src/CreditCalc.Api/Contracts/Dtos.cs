@@ -29,11 +29,6 @@ public record MortgageEventDto(
 /// <summary>Ответ <c>GET /api/mortgages/{id}</c> — ипотека вместе с историей событий.</summary>
 public record MortgageDetailsDto(MortgageDto Mortgage, IReadOnlyList<MortgageEventDto> Events);
 
-public record AuthUserDto(ulong Id, long TelegramId, string? Username, string? FirstName, string? LastName);
-
-/// <summary>Ответ <c>POST /api/auth/telegram</c>.</summary>
-public record AuthResponseDto(string Token, AuthUserDto User);
-
 /// <summary>
 /// Настройки аккаунта, хранимые на сервере (spec §4.1 tracker-design, §7.1 mortgage-timeline-design).
 /// <c>Salary</c> и <c>StartingSavings</c> — nullable поля: <c>StartingSavings</c> nullable потому,

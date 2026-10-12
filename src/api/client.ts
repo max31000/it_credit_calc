@@ -1,71 +1,46 @@
-import { useAuthStore } from '../store/useAuthStore'
-import { useCalculatorStore } from '../store/useCalculatorStore'
+import { ApiError, apiJson, requestLogin } from '@mvv42/kit/platform'
+
+export { ApiError }
+
+/** id сервиса в mvv42 (auth registry, shell, `Mvv42Provider`). */
+export const SERVICE_ID = 'credit_calc'
 
 /**
- * Пусто на GitHub Pages (сборка без VITE_API_BASE) — трекер там полностью скрыт,
- * см. §6 спеки. На VDS — `/credit_calc/api`, проксируется nginx-ом фронт-контейнера.
+ * Пусто на GitHub Pages/Vercel (сборка без VITE_API_BASE) — трекер там полностью скрыт,
+ * см. §6 спеки. На VDS — `/credit_calc/api` (относительный путь того же origin: cookie общего
+ * auth уходят сами), проксируется nginx-ом фронт-контейнера.
  */
 export const API_BASE = import.meta.env.VITE_API_BASE ?? ''
 export const TRACKER_ENABLED = API_BASE !== ''
 
-/** Ошибка ответа API с HTTP-статусом — позволяет вызывающему коду отличать
- *  «неавторизован» (401) от прочих ошибок (в т.ч. сетевых, у которых status нет). */
-export class ApiError extends Error {
-  readonly status: number
+/**
+ * JSON-запрос к API трекера через `apiJson` кита: cookie общего auth, 401 → один refresh → повтор.
+ * Окончательный 401 (сессии нет) — просим shell показать вход; 403 и прочие ошибки — `ApiError`
+ * вызывающему коду (экраны показывают `ErrorState`, мутации — уведомление).
+ */
+export interface RequestOptions {
+  /** Фоновый запрос (синхронизация настроек): окончательный 401 НЕ уводит на вход — пользователь
+   *  этого не просил; экран узнает о выходе через `useMe`. */
+  background?: boolean
+}
 
-  constructor(message: string, status: number) {
-    super(message)
-    this.name = 'ApiError'
-    this.status = status
+async function request<T>(path: string, init?: RequestInit, options?: RequestOptions): Promise<T> {
+  try {
+    return await apiJson<T>(`${API_BASE}${path}`, init)
+  } catch (e) {
+    if (e instanceof ApiError && e.status === 401 && !options?.background) requestLogin(SERVICE_ID)
+    throw e
   }
 }
 
-function authHeaders(): Record<string, string> {
-  const token = useAuthStore.getState().token
-  return token ? { Authorization: `Bearer ${token}` } : {}
-}
-
-async function request<T>(path: string, options?: RequestInit): Promise<T> {
-  const res = await fetch(`${API_BASE}${path}`, {
-    ...options,
-    headers: {
-      'Content-Type': 'application/json',
-      ...authHeaders(),
-      ...(options?.headers ?? {}),
-    },
-  })
-
-  if (res.status === 401) {
-    // Токен истёк или невалиден — разлогиниваем и уводим на экран входа.
-    // exitMortgageMode() — как в Header.handleLogout (G4): без него баннер режима
-    // ипотеки пережил бы жёсткий редирект (persisted linkedMortgage) и показался бы
-    // разлогиненному гостю или следующему пользователю на этом устройстве.
-    useCalculatorStore.getState().exitMortgageMode()
-    useAuthStore.getState().logout()
-    window.location.href = `${import.meta.env.BASE_URL ?? '/'}login`
-    throw new ApiError('Требуется авторизация', 401)
-  }
-
-  if (!res.ok) {
-    const error = await res.json().catch(() => ({ error: res.statusText }))
-    throw new ApiError((error as { error?: string }).error ?? `HTTP ${res.status}`, res.status)
-  }
-
-  if (res.status === 204) return undefined as T
-  return res.json() as Promise<T>
-}
+const withBody = (method: string, body: unknown): RequestInit => ({
+  method,
+  body: body !== undefined ? JSON.stringify(body) : undefined,
+})
 
 export const apiClient = {
-  get: <T>(path: string) => request<T>(path),
-  post: <T>(path: string, body?: unknown) =>
-    request<T>(path, {
-      method: 'POST',
-      body: body !== undefined ? JSON.stringify(body) : undefined,
-    }),
-  put: <T>(path: string, body?: unknown) =>
-    request<T>(path, {
-      method: 'PUT',
-      body: body !== undefined ? JSON.stringify(body) : undefined,
-    }),
-  delete: <T>(path: string) => request<T>(path, { method: 'DELETE' }),
+  get: <T>(path: string, options?: RequestOptions) => request<T>(path, undefined, options),
+  post: <T>(path: string, body?: unknown, options?: RequestOptions) => request<T>(path, withBody('POST', body), options),
+  put: <T>(path: string, body?: unknown, options?: RequestOptions) => request<T>(path, withBody('PUT', body), options),
+  delete: <T>(path: string, options?: RequestOptions) => request<T>(path, { method: 'DELETE' }, options),
 }

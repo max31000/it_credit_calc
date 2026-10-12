@@ -1,13 +1,9 @@
-using System.Text;
 using System.Text.Json.Serialization;
 using CreditCalc.Api.Auth;
 using CreditCalc.Api.Data;
 using CreditCalc.Api.Endpoints;
 using CreditCalc.Api.Middleware;
-using Microsoft.AspNetCore.Authentication.JwtBearer;
-using Microsoft.AspNetCore.Authorization;
-using Microsoft.Extensions.Options;
-using Microsoft.IdentityModel.Tokens;
+using Mvv42.Auth.Client;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -35,8 +31,7 @@ builder.Services.AddScoped<UserRepository>();
 builder.Services.AddScoped<MortgageRepository>();
 builder.Services.AddScoped<MortgageEventRepository>();
 builder.Services.AddScoped<UserSettingsRepository>();
-builder.Services.AddScoped<TelegramAuthService>();
-builder.Services.AddScoped<JwtIssuer>();
+builder.Services.AddScoped<IUserStore>(sp => sp.GetRequiredService<UserRepository>());
 
 // MigrationRunner резолвится (и, значит, читает ConnectionStrings:DefaultConnection) только
 // когда Program.cs явно запрашивает его ниже — в Testing-окружении этого не происходит,
@@ -46,39 +41,18 @@ builder.Services.AddSingleton(sp => new MigrationRunner(
         ?? throw new InvalidOperationException("ConnectionStrings:DefaultConnection не настроена"),
     sp.GetRequiredService<ILogger<MigrationRunner>>()));
 
-// JWT-авторизация. Jwt:Secret читается лениво через IConfigureOptions<JwtBearerOptions>
-// (а не сразу из builder.Configuration на старте), чтобы WebApplicationFactory.ConfigureWebHost
-// в тестах успела подменить секрет до первого запроса — паттерн из bonds/Bonds.Api/Program.cs.
-builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
-    .AddJwtBearer();
+// Аутентификация — только общий mvv42-auth: ES256 access-JWT из cookie, ключи из JWKS по docker-сети
+// (sdk/dotnet/Mvv42Auth.cs, copy-in). Схема mvv42 — схема по умолчанию; FallbackPolicy = политика SDK
+// (аутентифицирован И credit_calc ∈ apps или adm) — новые маршруты защищены по умолчанию.
+// Локальный пользователь — по claim tg через ICurrentUser (spec §10.12), sub не используется.
+builder.Services.AddAuthentication(Mvv42Auth.Scheme);
+builder.Services.AddMvv42Auth(Mvv42App.Id, o => builder.Configuration.GetSection("Mvv42Auth").Bind(o));
+builder.Services.AddAuthorization(options => options.FallbackPolicy = options.GetPolicy(Mvv42Auth.Policy));
 
-builder.Services.AddSingleton<IConfigureOptions<JwtBearerOptions>>(sp =>
-    new ConfigureNamedOptions<JwtBearerOptions>(JwtBearerDefaults.AuthenticationScheme, options =>
-    {
-        var config = sp.GetRequiredService<IConfiguration>();
-        var secret = config["Jwt:Secret"] ?? throw new InvalidOperationException("Jwt:Secret не настроен");
-
-        options.TokenValidationParameters = new TokenValidationParameters
-        {
-            ValidateIssuerSigningKey = true,
-            IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(secret)),
-            ValidateIssuer = true,
-            ValidIssuer = config["Jwt:Issuer"] ?? "credit_calc",
-            ValidateAudience = true,
-            ValidAudience = config["Jwt:Audience"] ?? "credit_calc",
-            ValidateLifetime = true,
-            ClockSkew = TimeSpan.FromSeconds(30),
-        };
-    }));
-
-// Fallback-политика: всё, что явно не помечено [AllowAnonymous], требует Bearer-токен —
-// новые маршруты защищены по умолчанию (spec §5.2).
-builder.Services.AddAuthorization(options =>
-{
-    options.FallbackPolicy = new AuthorizationPolicyBuilder()
-        .RequireAuthenticatedUser()
-        .Build();
-});
+builder.Services.AddHttpContextAccessor();
+builder.Services.AddMemoryCache();
+builder.Services.AddScoped<UserProvisioning>();
+builder.Services.AddScoped<ICurrentUser, CurrentUser>();
 
 // JSON: camelCase + string enums (контракт для фронта, spec §3)
 builder.Services.ConfigureHttpJsonOptions(options =>
@@ -91,22 +65,18 @@ builder.Services.ConfigureHttpJsonOptions(options =>
 
 var app = builder.Build();
 
-// Fail-fast: вне Development/Testing не стартуем с пустым/коротким/закоммиченным dev-секретом.
-// Проверяем после Build(), чтобы учесть все источники конфигурации (env vars, переопределения в тестах).
-JwtSecretGuard.Validate(app.Environment, app.Configuration["Jwt:Secret"]);
-
 // Единый формат ошибок для необработанных исключений — должен оборачивать весь остальной
 // конвейер, иначе исключения дальше по цепочке в него не попадут.
 app.UseMiddleware<ErrorHandlingMiddleware>();
 
-app.UseCors();
-
+// Swagger (только Development) — до аутентификации: FallbackPolicy применяется и к запросам без эндпоинта.
 if (app.Environment.IsDevelopment())
 {
     app.UseSwagger();
     app.UseSwaggerUI(c => c.SwaggerEndpoint("/swagger/v1/swagger.json", "CreditCalc API v1"));
 }
 
+app.UseCors();
 app.UseAuthentication();
 app.UseAuthorization();
 
@@ -125,7 +95,6 @@ if (!app.Environment.IsEnvironment("Testing"))
     }
 }
 
-app.MapAuthEndpoints();
 app.MapMortgageEndpoints();
 app.MapProfileEndpoints();
 

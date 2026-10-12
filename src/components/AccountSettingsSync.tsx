@@ -1,7 +1,6 @@
 import { useEffect, useRef } from 'react'
 import { notifications } from '@mantine/notifications'
-import { TRACKER_ENABLED } from '../api/client'
-import { useAuthStore } from '../store/useAuthStore'
+import { useTrackerUser } from '../hooks/useTrackerUser'
 import { useCalculatorStore, ACCOUNT_SETTING_KEYS } from '../store/useCalculatorStore'
 import { getSettings, putSettings } from '../api/profile'
 import { accountSettingsFromParams } from '../lib/mortgageToParams'
@@ -19,19 +18,33 @@ function accountSettingsEqual(a: AccountSettings, b: AccountSettings): boolean {
  * Синхронизация полей аккаунта из `ACCOUNT_SETTING_KEYS` (С3, §5.3 спеки
  * docs/specs/2026-08-12-tracker-ux-design.md; §2.6 дизайна таймлайна добавил седьмое —
  * `startingSavings`)
- * с сервером. Компонент без разметки — монтируется в `Shell` (`src/App.tsx`).
+ * с сервером. Компонент без разметки — монтируется в `App` (`src/App.tsx`).
  *
- * Работает только при `TRACKER_ENABLED && isAuthenticated` (иначе — ни одного запроса, G12).
+ * Пользователь — из общего auth (`useMe().user` кита, ключ — `user.id`). Работает только для
+ * вошедшего пользователя с доступом к сервису и при `TRACKER_ENABLED` (иначе — ни одного запроса, G12).
  * При смене `user.id`: GET → `settings === null` сеет PUT из ownParams, иначе сервер побеждает
  * (applyAccountSettings). При изменении любого из этих полей — дебаунс 800 мс → PUT.
+ *
+ * Выход (в shell, в другой вкладке или через меню аккаунта) — `user` становится `null`: режим
+ * ипотеки сбрасывается, чтобы гость или следующий пользователь не увидел чужую ипотеку (G4).
  */
 export function AccountSettingsSync() {
-  const isAuthenticated = useAuthStore((s) => s.isAuthenticated())
-  const userId = useAuthStore((s) => s.user?.id ?? null)
+  const { user, status } = useTrackerUser()
+  const userId = user?.id ?? null
   const exitMortgageMode = useCalculatorStore((s) => s.exitMortgageMode)
   const applyAccountSettings = useCalculatorStore((s) => s.applyAccountSettings)
+  const hasLinkedMortgage = useCalculatorStore((s) => s.linkedMortgage !== null)
 
-  const active = TRACKER_ENABLED && isAuthenticated
+  const active = userId !== null
+
+  // Достоверно известно, что пользователя нет (аноним / нет доступа), а режим ипотеки остался
+  // в персисте от прошлой сессии — выходим из него. При недоступном auth (`unavailable`) и во время
+  // загрузки ничего не трогаем: временный сбой не должен выкидывать из режима ипотеки.
+  useEffect(() => {
+    if (userId === null && hasLinkedMortgage && (status === 'anonymous' || status === 'authenticated')) {
+      exitMortgageMode()
+    }
+  }, [userId, status, hasLinkedMortgage, exitMortgageMode])
 
   const loadedRef = useRef(false)
   const lastUserIdRef = useRef<number | null>(null)
@@ -56,6 +69,9 @@ export function AccountSettingsSync() {
       // Смена пользователя внутри активной сессии — не показываем чужую ипотеку (G4).
       exitMortgageMode()
     }
+    // Персист принадлежал другому пользователю (вход B после A на том же устройстве) — сбрасываем
+    // режим ипотеки и параметры ДО GET/посева: параметры A не должны уехать PUT-ом в аккаунт B.
+    useCalculatorStore.getState().claimForUser(userId)
     lastUserIdRef.current = userId
     loadedRef.current = false
     notifiedRef.current = false
@@ -63,8 +79,7 @@ export function AccountSettingsSync() {
 
     // Актуальность ответа/повтора проверяем по «мы всё ещё тот же залогиненный пользователь»,
     // а не флагом на замыкание эффекта: при разлогине первый эффект обнуляет lastUserIdRef,
-    // и отложенный GET не уедет без токена (иначе 401 жёстко увёл бы на /login,
-    // см. api/client.ts). Отмена по флагу здесь была бы неверной — StrictMode в dev
+    // и отложенный GET не уедет без сессии (иначе 401 запросил бы вход, см. api/client.ts). Отмена по флагу здесь была бы неверной — StrictMode в dev
     // прогоняет эффект дважды, и второй прогон уходит в ранний return выше.
     const isStale = () => lastUserIdRef.current !== userId
 
@@ -100,8 +115,8 @@ export function AccountSettingsSync() {
   useEffect(() => {
     if (!active) return undefined
 
-    // lastUserIdRef === null — пользователь уже вышел: отложенный PUT ушёл бы без токена
-    // и получил бы 401 с жёстким редиректом на /login.
+    // lastUserIdRef === null — пользователь уже вышел: отложенный PUT ушёл бы без сессии
+    // и получил бы 401 с запросом входа.
     const sendWithRetry = (settings: AccountSettings, retry: boolean) => {
       if (lastUserIdRef.current === null) return
       putSettings(settings).catch(() => {

@@ -1,16 +1,6 @@
 import { memo, useMemo, type ReactNode } from 'react'
-import {
-  Paper,
-  Text,
-  Divider,
-  SimpleGrid,
-  Stack,
-  Group,
-  ThemeIcon,
-  Accordion,
-  Table,
-  Badge,
-} from '@mantine/core'
+import { Text, Group, ThemeIcon, Accordion, Table, Badge } from '@mantine/core'
+import { Metric, MetricGrid, Section } from '@mvv42/kit'
 import {
   IconCoin,
   IconShieldCheck,
@@ -24,7 +14,6 @@ import {
   IconReceipt,
 } from '@tabler/icons-react'
 import { useCalculatorStore } from '../../store/useCalculatorStore'
-import { MetricCard } from '../controls/MetricCard'
 import { formatRub, formatMonths } from '../../lib/formatters'
 import { buildDeductionReport, type DeductionStatus } from '../../lib/reporting'
 
@@ -35,26 +24,22 @@ interface InsightCardProps {
   children: ReactNode
 }
 
+/** Один вывод: иконка-маркер (цвет = смысл: риск, выгода, нейтрально), заголовок и пояснение. */
 function InsightCard({ icon, color, title, children }: InsightCardProps) {
   return (
-    <Paper
-      p="md"
-      radius="md"
-      withBorder
-      style={{ borderLeft: `4px solid var(--mantine-color-${color}-6)` }}
-    >
-      <Group gap="sm" align="flex-start" wrap="nowrap">
-        <ThemeIcon color={color} variant="light" size="lg" radius="xl">
-          {icon}
-        </ThemeIcon>
-        <Stack gap={4} style={{ flex: 1 }}>
-          <Text fw={600} size="sm">
-            {title}
-          </Text>
-          <Text size="sm">{children}</Text>
-        </Stack>
-      </Group>
-    </Paper>
+    <li className="cc-insight">
+      <ThemeIcon color={color} variant="light" size={32} radius="xl" aria-hidden="true">
+        {icon}
+      </ThemeIcon>
+      <div className="cc-insight-body">
+        <Text fw={600} size="sm">
+          {title}
+        </Text>
+        <Text size="sm" c="var(--mvv-text-2)">
+          {children}
+        </Text>
+      </div>
+    </li>
   )
 }
 
@@ -114,59 +99,44 @@ export const InsightsSection = memo(function InsightsSection() {
   const prepaymentsCount = fact ? fact.events.filter((e) => e.kind === 'prepayment').length : 0
 
   return (
-    <Paper p="lg" shadow="sm" radius="md">
-      <Text fw={600} size="lg">
-        Выводы на горизонте {horizonLabel}
-        {hasFact && ' — считаем от сегодня'}
-      </Text>
-      <Divider mb="md" mt="xs" />
-
-      {/* Ключевые числа */}
-      <SimpleGrid cols={{ base: 2, sm: 4 }} spacing="md" mb="md">
-        <MetricCard
+    <>
+      {/* Ключевые числа. «Уплачено банку с начала ипотеки» (§3.4, §5 спеки): факт + прогноз;
+          без факта совпадает с прежними totalPaid/totalInterest — карточка честна и для гостя. */}
+      <MetricGrid cols={3} aria-label="Ключевые числа">
+        <Metric
           label="Обязательный платёж"
-          value={`${formatRub(minPayment)}/мес`}
-          color="blue"
+          value={formatRub(minPayment)}
           // В режиме ипотеки это фактический платёж по договору (`fact.payment`), а не
           // рассчитанный льготный аннуитет — ставка могла уже смениться rate-событием.
-          description={hasFact ? 'по договору, факт' : 'льготный аннуитет'}
+          hint={hasFact ? 'в месяц, по договору' : 'в месяц, льготный аннуитет'}
         />
-        <MetricCard label={overpayLabel} value={overpayValue} color="red" description={overpayDescription} />
-        <MetricCard
+        <Metric label={overpayLabel} value={overpayValue} hint={overpayDescription} />
+        <Metric
           label="Доход от инвестиций"
           value={formatRub(summary.save.investmentIncome)}
-          color="green"
-          description="если копить, за горизонт"
+          hint="если копить, за горизонт"
         />
-        <MetricCard
+        <Metric
           label="Налоговые вычеты"
-          value={
-            result.tax
-              ? formatRub(result.tax.propertyReturnTotal + result.tax.interestReturnTotal)
-              : '—'
-          }
-          color={result.tax ? 'green' : 'gray'}
-          description={result.tax ? 'за горизонт' : 'укажите зарплату'}
+          value={result.tax ? formatRub(result.tax.propertyReturnTotal + result.tax.interestReturnTotal) : '—'}
+          hint={result.tax ? 'за горизонт' : 'укажите зарплату'}
         />
-      </SimpleGrid>
-
-      {/* Уплачено банку с выдачи ипотеки (§3.4, §5 спеки): факт + прогноз; без факта совпадает
-          с прежними totalPaid/totalInterest — карточка честна и для гостя. */}
-      <SimpleGrid cols={{ base: 2, sm: 4 }} spacing="md" mb="lg">
-        <MetricCard
+        <Metric
           label="Уплачено банку с начала ипотеки"
           value={formatRub(summary.save.totalPaidWithFact)}
-          color="default"
-          description={hasFact ? 'факт + прогноз, с выдачи' : 'за горизонт'}
+          hint={hasFact ? 'факт + прогноз, с выдачи' : 'за горизонт'}
         />
-        <MetricCard
+        <Metric
           label="Из них процентов"
           value={formatRub(summary.save.totalInterestWithFact)}
-          color="default"
-          description={hasFact ? 'факт + прогноз, с выдачи' : 'за горизонт'}
+          hint={hasFact ? 'факт + прогноз, с выдачи' : 'за горизонт'}
         />
-      </SimpleGrid>
+      </MetricGrid>
 
+      <Section
+        title={`Выводы на горизонте ${horizonLabel}`}
+        description={hasFact ? 'Считаем от сегодня' : 'Досрочное погашение против накоплений, точка погашения и цена слёта'}
+      >
       {result.tax && (
         <Text size="xs" c="dimmed" mb="sm">
           Доступная база: имущественный {formatRub(result.tax.propertyBaseStart)}
@@ -192,13 +162,14 @@ export const InsightsSection = memo(function InsightsSection() {
               </Group>
             </Accordion.Control>
             <Accordion.Panel>
-              <Table striped style={{ fontSize: 12 }}>
+              <Table.ScrollContainer minWidth={420}>
+              <Table fz="xs">
                 <Table.Thead>
                   <Table.Tr>
                     <Table.Th>Год</Table.Th>
-                    <Table.Th>Проценты за год</Table.Th>
+                    <Table.Th ta="right">Проценты за год</Table.Th>
                     <Table.Th>Что с вычетом</Table.Th>
-                    <Table.Th>Возврат</Table.Th>
+                    <Table.Th ta="right">Возврат</Table.Th>
                   </Table.Tr>
                 </Table.Thead>
                 <Table.Tbody>
@@ -212,19 +183,20 @@ export const InsightsSection = memo(function InsightsSection() {
                           </Badge>
                         )}
                       </Table.Td>
-                      <Table.Td>{formatRub(row.interestPaid)}</Table.Td>
+                      <Table.Td ta="right">{formatRub(row.interestPaid)}</Table.Td>
                       <Table.Td>{DEDUCTION_STATUS_LABEL[row.status]}</Table.Td>
-                      <Table.Td>{formatRub(row.refund)}</Table.Td>
+                      <Table.Td ta="right">{formatRub(row.refund)}</Table.Td>
                     </Table.Tr>
                   ))}
                 </Table.Tbody>
               </Table>
+              </Table.ScrollContainer>
             </Accordion.Panel>
           </Accordion.Item>
         </Accordion>
       )}
 
-      <Stack gap="sm">
+      <ul className="cc-insights">
         {fact && !fact.paymentCoversInterest && (
           <InsightCard
             icon={<IconAlertTriangle size={18} />}
@@ -419,7 +391,8 @@ export const InsightsSection = memo(function InsightsSection() {
             )}
           </InsightCard>
         )}
-      </Stack>
-    </Paper>
+      </ul>
+      </Section>
+    </>
   )
 })

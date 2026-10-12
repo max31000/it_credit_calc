@@ -36,7 +36,7 @@ public class MortgageRepository
         _db = db;
     }
 
-    public async Task<IReadOnlyList<Mortgage>> ListAsync(ulong userId)
+    public virtual async Task<IReadOnlyList<Mortgage>> ListAsync(ulong userId)
     {
         await using var connection = _db.Create();
         var rows = await connection.QueryAsync<Mortgage>(
@@ -45,7 +45,7 @@ public class MortgageRepository
         return rows.ToList();
     }
 
-    public async Task<Mortgage?> GetAsync(ulong userId, ulong id)
+    public virtual async Task<Mortgage?> GetAsync(ulong userId, ulong id)
     {
         await using var connection = _db.Create();
         return await connection.QuerySingleOrDefaultAsync<Mortgage>(
@@ -53,7 +53,7 @@ public class MortgageRepository
             new { Id = id, UserId = userId });
     }
 
-    public async Task<ulong> CreateAsync(ulong userId, MortgageRequest request)
+    public virtual async Task<ulong> CreateAsync(ulong userId, MortgageRequest request)
     {
         await using var connection = _db.Create();
         return await connection.ExecuteScalarAsync<ulong>(
@@ -80,7 +80,7 @@ public class MortgageRepository
     }
 
     /// <summary>Возвращает обновлённую строку или <c>null</c>, если ипотека не найдена/чужая.</summary>
-    public async Task<Mortgage?> UpdateAsync(ulong userId, ulong id, MortgageRequest request)
+    public virtual async Task<Mortgage?> UpdateAsync(ulong userId, ulong id, MortgageRequest request)
     {
         await using var connection = _db.Create();
         var rows = await connection.ExecuteAsync(
@@ -114,7 +114,7 @@ public class MortgageRepository
             new { Id = id, UserId = userId });
     }
 
-    public async Task<bool> DeleteAsync(ulong userId, ulong id)
+    public virtual async Task<bool> DeleteAsync(ulong userId, ulong id)
     {
         await using var connection = _db.Create();
         var rows = await connection.ExecuteAsync(

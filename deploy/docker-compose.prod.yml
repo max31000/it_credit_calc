@@ -1,8 +1,14 @@
+# Запуск на сервере (секреты в .env пишет backend-job, теги образов в tags.env — каждый job свой):
+#   cd /opt/credit_calc
+#   docker compose --env-file .env --env-file tags.env -f docker-compose.prod.yml ps
+# Подробнее — README, раздел «Деплой».
 services:
   credit_calc:
-    image: ghcr.io/max31000/it_credit_calc:latest
+    image: ghcr.io/max31000/it_credit_calc:${WEB_TAG:?WEB_TAG (sha-<commit>) is required, see tags.env}
     container_name: credit_calc
     restart: unless-stopped
+    labels:
+      com.centurylinklabs.watchtower.enable: "false"
     ports:
       - "127.0.0.1:8081:80"
     depends_on:
@@ -11,26 +17,29 @@ services:
       - credit_calc_net
 
   credit_calc_api:
-    image: ghcr.io/max31000/it_credit_calc-api:latest
+    image: ghcr.io/max31000/it_credit_calc-api:${API_TAG:?API_TAG (sha-<commit>) is required, see tags.env}
     container_name: credit_calc_api
     restart: unless-stopped
+    labels:
+      com.centurylinklabs.watchtower.enable: "false"
     environment:
       ASPNETCORE_ENVIRONMENT: Production
       ASPNETCORE_URLS: http://+:8080
       ConnectionStrings__DefaultConnection: "Server=credit_calc_mysql;Port=3306;Database=credit_calc;User=credit_calc;Password=${MYSQL_PASSWORD};AllowPublicKeyRetrieval=true;"
-      Jwt__Secret: "${JWT_SECRET}"
-      Telegram__BotToken: "${TELEGRAM_BOT_TOKEN}"
-      Telegram__BotUsername: mv_cashpulse_bot
+      # Auth: общий mvv42-auth, JWKS по http://mvv42-auth:8080 (сеть cashpulse) — дефолты SDK.
     depends_on:
       credit_calc_mysql:
         condition: service_healthy
     networks:
       - credit_calc_net
+      - cashpulse
 
   credit_calc_mysql:
     image: mysql:8.0
     container_name: credit_calc_mysql
     restart: unless-stopped
+    labels:
+      com.centurylinklabs.watchtower.enable: "false"
     environment:
       MYSQL_ROOT_PASSWORD: "${MYSQL_ROOT_PASSWORD}"
       MYSQL_DATABASE: credit_calc
@@ -49,6 +58,10 @@ services:
 networks:
   credit_calc_net:
     driver: bridge
+  # Внешняя сеть платформы: там живёт mvv42-auth (JWKS) — spec §10.14.
+  cashpulse:
+    external: true
+    name: cashpulse-network
 
 volumes:
   credit_calc_mysql_data:

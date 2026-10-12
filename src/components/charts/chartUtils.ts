@@ -1,24 +1,21 @@
-import { useComputedColorScheme } from '@mantine/core'
+import { chartColors } from '@mvv42/kit/charts'
 
-/** Цвета линий: единые для всех графиков */
+/**
+ * Цвета линий — единые для всех графиков, из палитры кита (CSS-переменные `--mvv-chart-*` и семантика,
+ * сами переключаются light/dark). Серии закреплены за сущностями: «гасить досрочно» и «копить» везде
+ * одного цвета; красный/зелёный — только по смыслу (потери/слёт, погашение).
+ */
 export const CHART_COLORS = {
-  prepay: '#f76707', // гасить досрочно
-  save: '#228be6', // копить
-  savingsLine: '#12b886',
-  danger: '#fa5252',
-  safety: '#7950f2',
-  payoff: '#2f9e44',
-  slip: '#e03131',
-  neutral: '#868e96',
+  save: chartColors.series[0], // копить
+  prepay: chartColors.series[1], // гасить досрочно
+  savingsLine: chartColors.series[2], // накопления
+  safety: chartColors.series[6], // точка безопасности
+  danger: chartColors.negative,
+  slip: chartColors.negative,
+  payoff: chartColors.positive,
+  neutral: chartColors.neutral,
+  surface: chartColors.surface,
 } as const
-
-export function useChartTheme() {
-  const isDark = useComputedColorScheme('light') === 'dark'
-  return {
-    gridColor: isDark ? '#373A40' : '#e9ecef',
-    tickColor: isDark ? '#909296' : '#868e96',
-  }
-}
 
 export function formatYAxis(v: number): string {
   if (Math.abs(v) >= 1_000_000) return `${(v / 1_000_000).toFixed(1)} млн`

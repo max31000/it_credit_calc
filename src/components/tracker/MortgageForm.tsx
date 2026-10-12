@@ -255,7 +255,8 @@ export function MortgageForm({ initial, submitting, onSubmit, onCancel, deductio
             data={interestYears.map((y) => ({ value: String(y), label: String(y) }))}
             onChange={handleInterestYearSelect}
             disabled={interestYears.length === 0}
-            style={{ flex: 1, minWidth: 220 }}
+            flex={1}
+            miw={220}
           />
           <Button variant="default" size="sm" onClick={handleInterestAllTime}>
             За всё время

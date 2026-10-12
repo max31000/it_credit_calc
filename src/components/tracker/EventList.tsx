@@ -1,5 +1,6 @@
-import { ActionIcon, Badge, Group, Paper, Stack, Text } from '@mantine/core'
-import { IconTrash } from '@tabler/icons-react'
+import { ActionIcon, Badge, Group, Text } from '@mantine/core'
+import { IconHistory, IconTrash } from '@tabler/icons-react'
+import { DataList, EmptyState, ListRow } from '@mvv42/kit'
 import type { MortgageEventDto, MortgageEventKind } from '../../api/types'
 import { formatRub, formatPct } from '../../lib/formatters'
 
@@ -26,9 +27,12 @@ interface EventListProps {
 export function EventList({ events, onDelete, deletingId }: EventListProps) {
   if (events.length === 0) {
     return (
-      <Text c="dimmed" size="sm">
-        Корректировок пока нет.
-      </Text>
+      <EmptyState
+        compact
+        icon={<IconHistory size={22} />}
+        title="Корректировок пока нет"
+        description="Добавляйте остаток из выписки, смену ставки и досрочные погашения — расчёт станет точнее."
+      />
     )
   }
 
@@ -39,29 +43,23 @@ export function EventList({ events, onDelete, deletingId }: EventListProps) {
   })
 
   return (
-    <Stack gap="xs">
+    <DataList aria-label="История корректировок">
       {sorted.map((e) => (
-        <Paper key={e.id} p="sm" radius="md" withBorder>
-          <Group justify="space-between" wrap="nowrap" align="flex-start">
-            <Stack gap={2}>
-              <Group gap={6}>
-                <Badge color={KIND_COLOR[e.kind]} variant="light">
-                  {KIND_LABEL[e.kind]}
-                </Badge>
-                <Text size="sm" c="dimmed">
-                  {e.occurredOn}
-                </Text>
-              </Group>
-              <Text size="sm">
-                {e.amount !== null && formatRub(e.amount)}
-                {e.rate !== null && formatPct(e.rate)}
+        <ListRow
+          key={e.id}
+          title={
+            <Group gap={8} wrap="wrap">
+              <Badge color={KIND_COLOR[e.kind]} variant="light">
+                {KIND_LABEL[e.kind]}
+              </Badge>
+              <Text span size="sm" c="dimmed">
+                {e.occurredOn}
               </Text>
-              {e.note && (
-                <Text size="xs" c="dimmed">
-                  {e.note}
-                </Text>
-              )}
-            </Stack>
+            </Group>
+          }
+          description={e.note ?? undefined}
+          value={e.amount !== null ? formatRub(e.amount) : e.rate !== null ? formatPct(e.rate) : undefined}
+          action={
             <ActionIcon
               color="red"
               variant="subtle"
@@ -71,9 +69,9 @@ export function EventList({ events, onDelete, deletingId }: EventListProps) {
             >
               <IconTrash size={16} />
             </ActionIcon>
-          </Group>
-        </Paper>
+          }
+        />
       ))}
-    </Stack>
+    </DataList>
   )
 }

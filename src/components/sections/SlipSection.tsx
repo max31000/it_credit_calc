@@ -1,5 +1,6 @@
 import { memo } from 'react'
-import { Paper, Text, Divider, Stack, Group, ThemeIcon, Alert, Switch, Collapse } from '@mantine/core'
+import { Text, Stack, Alert, Switch } from '@mantine/core'
+import { Section } from '@mvv42/kit'
 import { IconAlertTriangle } from '@tabler/icons-react'
 import { useCalculatorStore } from '../../store/useCalculatorStore'
 import { SliderInput } from '../controls/SliderInput'
@@ -59,35 +60,23 @@ export const SlipSection = memo(function SlipSection() {
     .filter((m) => m.value <= maxSlipMonth)
 
   return (
-    <Paper
-      p="lg"
-      shadow="sm"
-      radius="md"
-      style={{ borderLeft: '4px solid var(--mantine-color-orange-6)' }}
-    >
-      <Group gap="xs" mb="xs" justify="space-between" wrap="wrap">
-        <Group gap="xs">
-          <ThemeIcon color="orange" variant="light" size="md">
-            <IconAlertTriangle size={16} />
-          </ThemeIcon>
-          <Text fw={600} size="lg">
-            Сценарий слёта с льготной программы
-          </Text>
-        </Group>
+    <Section
+      padding="lg"
+      title="Сценарий слёта с льготной программы"
+      description={
+        slipEnabled
+          ? 'Если льгота теряется, банк переводит кредит на рыночную ставку. В расчёте при слёте все накопления сразу вносятся в досрочное погашение, дальше жизнь идёт по новым условиям. Последствия — в «Выводах» ниже.'
+          : 'Сценарий выключен — расчёт идёт по льготной ставке.'
+      }
+      actions={
         <Switch
           checked={slipEnabled}
           onChange={(e) => setSlipEnabled(e.currentTarget.checked)}
           label="Моделировать слёт"
         />
-      </Group>
-      <Text size="sm" c="dimmed">
-        {slipEnabled
-          ? 'Если льгота теряется, банк переводит кредит на рыночную ставку. В расчёте при слёте все накопления сразу вносятся в досрочное погашение, дальше жизнь идёт по новым условиям. Последствия — в «Выводах» ниже.'
-          : 'Сценарий выключен — расчёт идёт по льготной ставке.'}
-      </Text>
-      <Divider mb="md" mt="xs" />
-
-      <Collapse expanded={slipEnabled}>
+      }
+    >
+      {slipEnabled && (
         <Stack gap="lg">
           {rateAlreadyMarket && (
             <Alert color="orange" variant="light" icon={<IconAlertTriangle size={16} />}>
@@ -106,7 +95,6 @@ export const SlipSection = memo(function SlipSection() {
               format={(v) => (v === 0 ? 'Слёта нет' : `Месяц ${v}`)}
               suffix=" мес"
               secondaryLabel={slipSecondaryLabel}
-              color="orange"
               marks={[{ value: 0, label: '0' }, ...yearMarks]}
             />
             {slipBeyondHorizon && (
@@ -127,7 +115,6 @@ export const SlipSection = memo(function SlipSection() {
             format={formatPct}
             suffix=" %"
             decimalScale={2}
-            color="red"
             marks={[
               { value: 4, label: '4%' },
               { value: 10, label: '10%' },
@@ -158,13 +145,13 @@ export const SlipSection = memo(function SlipSection() {
 
           <Text size="sm" c="dimmed">
             Рыночная ставка после слёта:{' '}
-            <Text span fw={600} c="red.7">
+            <Text span fw={600} c="red" className="mvv-num">
               {formatPct(result.marketRateAtSlip)}
             </Text>{' '}
             ({params.keyRate}% − {params.bankDiscount}% + 1,5%)
           </Text>
         </Stack>
-      </Collapse>
-    </Paper>
+      )}
+    </Section>
   )
 })

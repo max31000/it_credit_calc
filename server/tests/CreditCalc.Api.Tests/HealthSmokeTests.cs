@@ -8,7 +8,7 @@ namespace CreditCalc.Api.Tests;
 /// <summary>
 /// Смоук-тесты через <see cref="WebApplicationFactory{TEntryPoint}"/> в окружении Testing —
 /// без Docker/реальной MySQL (Program.cs пропускает MigrationRunner.RunAsync в этом окружении,
-/// а TelegramAuthService/репозитории не конструируются для этих двух маршрутов).
+/// а репозитории не конструируются для этих двух маршрутов).
 /// </summary>
 public class HealthSmokeTests : IClassFixture<HealthSmokeTests.TestingWebApplicationFactory>
 {

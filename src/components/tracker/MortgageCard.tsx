@@ -17,6 +17,7 @@ export function MortgageCard({ mortgage, events }: MortgageCardProps) {
   const enterMortgageMode = useCalculatorStore((s) => s.enterMortgageMode)
   const state = computeMortgageState(mortgage, events, new Date())
   const mortgageClosed = state.currentBalance === 0
+  const open = () => navigate(`/tracker/${mortgage.id}`)
 
   const handleOpenInCalculator = (e: React.MouseEvent) => {
     e.stopPropagation()
@@ -30,39 +31,50 @@ export function MortgageCard({ mortgage, events }: MortgageCardProps) {
   return (
     <Paper
       p="md"
-      radius="md"
-      shadow="sm"
-      withBorder
-      style={{ cursor: 'pointer' }}
-      onClick={() => navigate(`/tracker/${mortgage.id}`)}
+      className="cc-card-link"
+      role="link"
+      tabIndex={0}
+      aria-label={`Ипотека «${mortgage.title}»`}
+      onClick={open}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' && e.target === e.currentTarget) open()
+      }}
     >
-      <Stack gap={6}>
-        <Group justify="space-between" wrap="nowrap" align="flex-start">
-          <Text fw={600}>{mortgage.title}</Text>
-          {mortgage.bank && (
+      <Stack gap="sm">
+        <Stack gap={2}>
+          <Text fw={600} lineClamp={1}>
+            {mortgage.title}
+          </Text>
+          <Text size="xs" c="dimmed" lineClamp={1}>
+            {mortgage.bank ?? 'Банк не указан'}
+          </Text>
+        </Stack>
+        <Group gap="lg" grow>
+          <Stack gap={0}>
             <Text size="xs" c="dimmed">
-              {mortgage.bank}
+              Остаток
             </Text>
-          )}
+            <Text fw={600} className="mvv-num">
+              {formatRub(state.currentBalance)}
+            </Text>
+          </Stack>
+          <Stack gap={0}>
+            <Text size="xs" c="dimmed">
+              Платёж
+            </Text>
+            <Text fw={600} className="mvv-num">
+              {formatRub(state.currentPayment)}/мес
+            </Text>
+          </Stack>
         </Group>
-        <Group gap="lg">
-          <Text size="sm">
-            Остаток: <b>{formatRub(state.currentBalance)}</b>
+        <Stack gap={6}>
+          <Progress value={state.progressPct * 100} size="sm" aria-label="Погашено тела кредита" />
+          <Text size="xs" c="dimmed">
+            {state.monthsLeft !== null && state.payoffDate
+              ? `Осталось ${formatMonths(state.monthsLeft)} — до ${formatYearMonth(state.payoffDate)}`
+              : 'Платёж не покрывает проценты — долг не убывает'}
           </Text>
-          <Text size="sm">
-            Платёж: <b>{formatRub(state.currentPayment)}/мес</b>
-          </Text>
-        </Group>
-        <Text size="xs" c="dimmed">
-          {state.monthsLeft !== null && state.payoffDate
-            ? `Осталось ${formatMonths(state.monthsLeft)} до ${formatYearMonth(state.payoffDate)}`
-            : 'Платёж не покрывает проценты — долг не убывает'}
-        </Text>
-        <Progress
-          value={state.progressPct * 100}
-          size="sm"
-          color={state.progressPct >= 1 ? 'green' : 'blue'}
-        />
+        </Stack>
         <Group justify="flex-end">
           <Tooltip label="Ипотека погашена — считать нечего" disabled={!mortgageClosed}>
             <Button
@@ -71,7 +83,7 @@ export function MortgageCard({ mortgage, events }: MortgageCardProps) {
               leftSection={<IconChartLine size={14} />}
               onClick={handleOpenInCalculator}
               aria-disabled={mortgageClosed}
-              style={mortgageClosed ? { opacity: 0.5, cursor: 'not-allowed' } : undefined}
+              data-disabled={mortgageClosed || undefined}
             >
               Открыть в калькуляторе
             </Button>

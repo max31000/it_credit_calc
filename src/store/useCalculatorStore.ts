@@ -99,6 +99,15 @@ interface CalculatorState {
   applyAccountSettings: (s: AccountSettings) => void
   /** Пометить, что факт не удалось загрузить (страница покажет алерт вместо графиков) */
   setFactError: (message: string | null) => void
+  /** id пользователя mvv42 (`useMe().user.id`), чьи параметры/режим ипотеки лежат в персисте;
+   *  null — гость или ещё никто не входил на этом устройстве. */
+  ownerUserId: number | null
+  /**
+   * Закрепить персист за вошедшим пользователем. Если в нём данные другого пользователя — выйти из
+   * режима ипотеки и сбросить параметры к дефолтам ДО синхронизации настроек (иначе посев PUT отправил бы
+   * параметры A в аккаунт B). Возвращает true, если был сброс.
+   */
+  claimForUser: (userId: number) => boolean
 }
 
 const defaultParams: MortgageParams = {
@@ -129,6 +138,7 @@ interface PersistedCalculatorState {
   ownParams: MortgageParams
   slipEnabled: boolean
   linkedMortgage: LinkedMortgage | null
+  ownerUserId?: number | null
 }
 
 export const useCalculatorStore = create<CalculatorState>()(
@@ -223,6 +233,29 @@ export const useCalculatorStore = create<CalculatorState>()(
         })
       },
       setFactError: (message) => set({ factError: message }),
+      ownerUserId: null,
+      claimForUser: (userId) => {
+        const owner = get().ownerUserId
+        if (owner === userId) return false
+        if (owner === null) {
+          // Гость вошёл: его параметры становятся параметрами аккаунта (посев при пустых настройках).
+          set({ ownerUserId: userId })
+          return false
+        }
+        set({
+          ownerUserId: userId,
+          linkedMortgage: null,
+          mortgageFact: null,
+          factError: null,
+          params: defaultParams,
+          ownParams: defaultParams,
+          slipEnabled: false,
+        })
+        startTransition(() => {
+          set({ result: recalc(defaultParams, false, null) })
+        })
+        return true
+      },
     }),
     {
       name: 'mortgage-calculator-params',
@@ -232,6 +265,7 @@ export const useCalculatorStore = create<CalculatorState>()(
         ownParams: state.ownParams,
         slipEnabled: state.slipEnabled,
         linkedMortgage: state.linkedMortgage,
+        ownerUserId: state.ownerUserId,
       }),
       migrate: (persisted, version): PersistedCalculatorState => {
         const prev = persisted as Partial<PersistedCalculatorState>
@@ -294,6 +328,7 @@ export const useCalculatorStore = create<CalculatorState>()(
           state.ownParams = { ...defaultParams, ...state.ownParams }
           state.slipEnabled = state.slipEnabled ?? false
           state.linkedMortgage = state.linkedMortgage ?? null
+          state.ownerUserId = state.ownerUserId ?? null
           // Факт-фаза никогда не персистится (§2.6 спеки) — страница калькулятора перезапросит
           // её у сервера; до этого гейт загрузки (linkedMortgage !== null && mortgageFact === null)
           // покажет скелетон вместо недостоверного расчёта.
