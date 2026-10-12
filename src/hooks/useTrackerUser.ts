@@ -6,11 +6,13 @@ export interface TrackerUser {
   user: Mvv42User | null
   /** Статус `/auth/api/me`: `unavailable` — auth не ответил (не путать с «аноним»). */
   status: MeStatus
+  /** Перечитать `/auth/api/me` (например, «Повторить» после недоступности auth). */
+  refresh: () => Promise<unknown>
 }
 
 /** Кто может пользоваться серверной частью (трекер, настройки аккаунта). Без VITE_API_BASE — никто. */
 export function useTrackerUser(): TrackerUser {
-  const { user, status, app } = useMe()
+  const { user, status, app, refresh } = useMe()
   const granted = TRACKER_ENABLED && user !== null && (app(SERVICE_ID)?.granted ?? false)
-  return { user: granted ? user : null, status }
+  return { user: granted ? user : null, status, refresh }
 }

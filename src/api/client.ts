@@ -18,11 +18,17 @@ export const TRACKER_ENABLED = API_BASE !== ''
  * Окончательный 401 (сессии нет) — просим shell показать вход; 403 и прочие ошибки — `ApiError`
  * вызывающему коду (экраны показывают `ErrorState`, мутации — уведомление).
  */
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+export interface RequestOptions {
+  /** Фоновый запрос (синхронизация настроек): окончательный 401 НЕ уводит на вход — пользователь
+   *  этого не просил; экран узнает о выходе через `useMe`. */
+  background?: boolean
+}
+
+async function request<T>(path: string, init?: RequestInit, options?: RequestOptions): Promise<T> {
   try {
     return await apiJson<T>(`${API_BASE}${path}`, init)
   } catch (e) {
-    if (e instanceof ApiError && e.status === 401) requestLogin(SERVICE_ID)
+    if (e instanceof ApiError && e.status === 401 && !options?.background) requestLogin(SERVICE_ID)
     throw e
   }
 }
@@ -33,8 +39,8 @@ const withBody = (method: string, body: unknown): RequestInit => ({
 })
 
 export const apiClient = {
-  get: <T>(path: string) => request<T>(path),
-  post: <T>(path: string, body?: unknown) => request<T>(path, withBody('POST', body)),
-  put: <T>(path: string, body?: unknown) => request<T>(path, withBody('PUT', body)),
-  delete: <T>(path: string) => request<T>(path, { method: 'DELETE' }),
+  get: <T>(path: string, options?: RequestOptions) => request<T>(path, undefined, options),
+  post: <T>(path: string, body?: unknown, options?: RequestOptions) => request<T>(path, withBody('POST', body), options),
+  put: <T>(path: string, body?: unknown, options?: RequestOptions) => request<T>(path, withBody('PUT', body), options),
+  delete: <T>(path: string, options?: RequestOptions) => request<T>(path, { method: 'DELETE' }, options),
 }

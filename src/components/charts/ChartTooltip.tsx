@@ -59,22 +59,17 @@ function tooltipHeader(
   return `${labelPrefix ?? 'Месяц'} ${x} (${formatMonths(x)})`
 }
 
-/** Подсказка графиков калькулятора — карточка кита со своим заголовком и форматом рублей. */
+/** Подсказка графиков калькулятора — карточка кита (пропуск null-точек, note) со своим заголовком и рублями. */
 export function ChartTooltip({ active, payload, label, footer, valueFormatter = formatRub, ...header }: ChartTooltipProps) {
-  if (!active || !payload || payload.length === 0 || label === undefined) return null
-  const x = typeof label === 'string' ? parseFloat(label) : label
-  const filled = payload.filter((item) => typeof item.value === 'number')
-  if (filled.length === 0) return null
-
+  if (!active || label === undefined) return null
   return (
     <KitChartTooltip
-      title={tooltipHeader(x, header)}
-      rows={filled.map((item) => ({
-        label: String(item.name ?? ''),
-        value: valueFormatter(item.value as number),
-        color: item.color,
-      }))}
-      footer={footer ? { label: footer, value: '' } : undefined}
+      active={active}
+      payload={payload}
+      label={label}
+      labelFormatter={(l) => tooltipHeader(typeof l === 'string' ? parseFloat(l) : Number(l), header)}
+      valueFormatter={(v) => valueFormatter(Number(v))}
+      note={footer}
     />
   )
 }

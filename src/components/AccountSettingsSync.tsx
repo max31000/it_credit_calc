@@ -69,6 +69,9 @@ export function AccountSettingsSync() {
       // Смена пользователя внутри активной сессии — не показываем чужую ипотеку (G4).
       exitMortgageMode()
     }
+    // Персист принадлежал другому пользователю (вход B после A на том же устройстве) — сбрасываем
+    // режим ипотеки и параметры ДО GET/посева: параметры A не должны уехать PUT-ом в аккаунт B.
+    useCalculatorStore.getState().claimForUser(userId)
     lastUserIdRef.current = userId
     loadedRef.current = false
     notifiedRef.current = false

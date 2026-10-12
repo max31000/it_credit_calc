@@ -19,7 +19,10 @@ import type { MortgageRequest } from '../api/types'
 
 export default function CalculatorPage() {
   const navigate = useNavigate()
-  const isAuthenticated = useTrackerUser().user !== null
+  const trackerUser = useTrackerUser()
+  const isAuthenticated = trackerUser.user !== null
+  const authStatus = trackerUser.status
+  const refreshMe = trackerUser.refresh
   const params = useCalculatorStore((s) => s.params)
   const result = useCalculatorStore((s) => s.result)
   const linkedMortgageId = useCalculatorStore((s) => s.linkedMortgage?.id ?? null)
@@ -44,6 +47,15 @@ export default function CalculatorPage() {
 
   // С4: актуализация из трекера при монтировании и при смене привязанной ипотеки —
   // параметры пересчитываются из свежих данных сервера, а не из снимка (§3.3 спеки).
+  // Персистированная привязка к ипотеке, но вход проверить не удалось (auth недоступен) — факт не
+  // загрузить: показываем алерт с «Повторить» / «К моим параметрам» вместо вечного скелетона.
+  // Аноним/нет доступа — режим сбрасывает AccountSettingsSync; `loading` — коротко, скелетон уместен.
+  useEffect(() => {
+    if (linkedMortgageId !== null && authStatus === 'unavailable' && factError === null) {
+      setFactError('Сервис входа недоступен — не получилось проверить аккаунт.')
+    }
+  }, [linkedMortgageId, authStatus, factError, setFactError])
+
   useEffect(() => {
     if (!TRACKER_ENABLED || !isAuthenticated || linkedMortgageId === null) return undefined
 
@@ -111,6 +123,7 @@ export default function CalculatorPage() {
                 leftSection={<IconRefresh size={14} />}
                 onClick={() => {
                   setFactError(null)
+                  if (authStatus === 'unavailable') void refreshMe()
                   setRetryTick((t) => t + 1)
                 }}
               >

@@ -44,6 +44,13 @@ describe('apiClient (общий auth)', () => {
     expect(requestLogin).toHaveBeenCalledWith('credit_calc')
   })
 
+  it('фоновый запрос (синхронизация настроек) при 401 вход не запрашивает', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(json(401, undefined)))
+
+    await expect(apiClient.get('/profile/settings', { background: true })).rejects.toMatchObject({ status: 401 })
+    expect(requestLogin).not.toHaveBeenCalled()
+  })
+
   it('403 — ApiError вызывающему коду, без запроса входа', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(json(403, { error: 'forbidden' })))
 
