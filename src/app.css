@@ -1,0 +1,102 @@
+/* Стили приложения поверх @mvv42/kit — только то, чего нет в ките; цвета/отступы — токены --mvv-*. */
+
+/* Список строк внутри Section padding="none" (история корректировок): разделители-волоски. */
+.cc-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.cc-list-row {
+  padding: var(--mvv-sp-3) var(--mvv-sp-5);
+}
+
+.cc-list-row + .cc-list-row {
+  border-top: 1px solid var(--mvv-border);
+}
+
+/* Выводы калькулятора: иконка-маркер + текст, разделены волосками. */
+.cc-insights {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.cc-insight {
+  display: flex;
+  gap: var(--mvv-sp-3);
+  align-items: flex-start;
+  padding: var(--mvv-sp-4) 0;
+}
+
+.cc-insight:first-child {
+  padding-top: var(--mvv-sp-1);
+}
+
+.cc-insight:last-child {
+  padding-bottom: 0;
+}
+
+.cc-insight + .cc-insight {
+  border-top: 1px solid var(--mvv-border);
+}
+
+.cc-insight-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.cc-insight-body b {
+  color: var(--mvv-text);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Формула в методологии. */
+.cc-formula {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: var(--mvv-fs-13);
+  white-space: pre-wrap;
+  padding: var(--mvv-sp-2) var(--mvv-sp-3);
+  border-radius: var(--mvv-r-sm);
+  background: var(--mvv-surface-2);
+  color: var(--mvv-text);
+}
+
+/* Карточка ипотеки в списке трекера — целиком кликабельна. */
+.cc-card-link {
+  cursor: pointer;
+  transition:
+    box-shadow var(--mvv-dur-fast) var(--mvv-ease),
+    background-color var(--mvv-dur-fast) var(--mvv-ease);
+}
+
+.cc-card-link:hover {
+  background: var(--mvv-surface-hover);
+}
+
+.cc-card-link:focus-visible {
+  outline: 2px solid var(--mvv-focus-ring);
+  outline-offset: 2px;
+}
+
+/* Слайдер: подписи первой и последней меток прижаты внутрь трека (не выходят за край на телефоне). */
+.cc-slider-edge-marks .mantine-Slider-markWrapper:first-of-type .mantine-Slider-markLabel {
+  transform: translate(0, calc(var(--mantine-spacing-xs) / 2));
+}
+
+.cc-slider-edge-marks .mantine-Slider-markWrapper:last-of-type .mantine-Slider-markLabel {
+  transform: translate(calc(-100% + var(--slider-size)), calc(var(--mantine-spacing-xs) / 2));
+}
+
+/* Обёртка метки по ширине подписи (а не точки) расширяла прокручиваемую область страницы:
+   обёртка — нулевой ширины, подпись — своей (transform-центровка Mantine сохраняется). */
+.mantine-Slider-markWrapper {
+  width: 0;
+}
+
+.mantine-Slider-markLabel {
+  width: max-content;
+}

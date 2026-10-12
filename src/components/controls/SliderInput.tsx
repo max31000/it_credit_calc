@@ -54,6 +54,10 @@ export function SliderInput({
   marks,
   rightHint,
 }: SliderInputProps) {
+  // Подписи крайних меток Mantine центрирует на точке — на 390px подпись у правого края
+  // («30М», «7 600 000 ₽») вылезала за экран. Крайние подписи прижимаем внутрь трека (app.css).
+  const edgeMarks =
+    marks !== undefined && marks.length > 1 && marks[0].value <= min && marks[marks.length - 1].value >= max
   return (
     <Stack gap={4}>
       <Group justify="space-between" align="center" wrap="nowrap">
@@ -89,6 +93,7 @@ export function SliderInput({
         label={format}
         color={color}
         marks={marks}
+        className={edgeMarks ? 'cc-slider-edge-marks' : undefined}
         mb={marks ? 'lg' : undefined}
       />
       {secondaryLabel && (

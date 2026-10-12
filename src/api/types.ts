@@ -85,16 +85,3 @@ export interface UserSettingsResponse {
   settings: AccountSettings | null
   updatedAt: string | null // ISO-8601 UTC
 }
-
-export interface AuthUser {
-  id: number
-  telegramId: number
-  username?: string | null
-  firstName?: string | null
-  lastName?: string | null
-}
-
-export interface AuthResponse {
-  token: string
-  user: AuthUser
-}

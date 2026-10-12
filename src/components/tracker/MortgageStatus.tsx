@@ -1,5 +1,5 @@
-import { Paper, Progress, SimpleGrid, Stack, Text } from '@mantine/core'
-import { MetricCard } from '../controls/MetricCard'
+import { Group, Progress, Stack, Text } from '@mantine/core'
+import { Metric, MetricGrid, Section } from '@mvv42/kit'
 import { formatRub, formatPct, formatMonths, formatYearMonth } from '../../lib/formatters'
 import type { MortgageState } from '../../lib/tracker'
 
@@ -8,37 +8,40 @@ interface MortgageStatusProps {
 }
 
 export function MortgageStatus({ state }: MortgageStatusProps) {
+  const pct = state.progressPct * 100
   return (
-    <Paper p="lg" shadow="sm" radius="md">
-      <Text fw={600} size="lg" mb="md">
-        Текущее состояние
-      </Text>
-      <SimpleGrid cols={{ base: 2, sm: 4 }} spacing="md" mb="lg">
-        <MetricCard label="Остаток долга" value={formatRub(state.currentBalance)} color="blue" />
-        <MetricCard label="Ставка" value={formatPct(state.currentRate)} color="orange" />
-        <MetricCard label="Платёж" value={`${formatRub(state.currentPayment)}/мес`} />
-        <MetricCard
+    <>
+      <MetricGrid cols={4} aria-label="Текущее состояние">
+        <Metric label="Остаток долга" value={formatRub(state.currentBalance)} />
+        <Metric label="Ставка" value={formatPct(state.currentRate)} />
+        <Metric label="Платёж" value={formatRub(state.currentPayment)} hint="в месяц" />
+        <Metric
           label="Осталось"
           value={state.monthsLeft !== null ? formatMonths(state.monthsLeft) : '—'}
-          color={state.monthsLeft !== null ? 'green' : 'red'}
-          description={
-            state.payoffDate
-              ? `закрытие к ${formatYearMonth(state.payoffDate)}`
-              : 'платёж не покрывает проценты'
+          hint={
+            state.payoffDate ? (
+              `закрытие к ${formatYearMonth(state.payoffDate)}`
+            ) : (
+              <Text span inherit c="red">
+                платёж не покрывает проценты
+              </Text>
+            )
           }
         />
-      </SimpleGrid>
-      <Stack gap={4}>
-        <Text size="sm">
-          Погашено тела кредита: <b>{formatRub(state.paidPrincipal)}</b> (
-          {(state.progressPct * 100).toFixed(1)}%)
-        </Text>
-        <Progress
-          value={state.progressPct * 100}
-          size="md"
-          color={state.progressPct >= 1 ? 'green' : 'blue'}
-        />
-      </Stack>
-    </Paper>
+      </MetricGrid>
+      <Section title="Погашение тела кредита">
+        <Stack gap={8}>
+          <Group justify="space-between" gap="xs">
+            <Text size="sm">
+              Погашено <b className="mvv-num">{formatRub(state.paidPrincipal)}</b>
+            </Text>
+            <Text size="sm" c="dimmed" className="mvv-num">
+              {pct.toFixed(1)}%
+            </Text>
+          </Group>
+          <Progress value={pct} size="md" aria-label="Погашено тела кредита" />
+        </Stack>
+      </Section>
+    </>
   )
 }

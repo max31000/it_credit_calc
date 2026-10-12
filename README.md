@@ -33,7 +33,8 @@
 ставка и платёж с учётом корректировок (новая выписка от банка, досрочные платежи, смена
 ставки при слёте с льготы, изменение платежа), прогноз даты полного погашения.
 
-Требует входа через Telegram Login Widget и доступен только на `mvv42.ru/credit_calc/` —
+Требует входа через общий аккаунт mvv42 (вход через Telegram в shell `mvv42.ru`, сервис `mvv42-auth`)
+и доступен только на `mvv42.ru/credit_calc/` —
 на GitHub Pages трекер выключен (сборка идёт без адреса API).
 
 ## Параметры
@@ -62,14 +63,14 @@ src/
     __tests__/
   store/                   — Zustand-сторы (calculator, auth), persist в localStorage
   api/                     — клиент API трекера
-  pages/                   — Calculator, Login, TrackerList, Mortgage
+  pages/                   — Calculator, TrackerList, Mortgage (UI на `@mvv42/kit`)
   components/
     layout/                — Header, Layout
     controls/              — SliderInput, MetricCard, InfoTooltip
     charts/                — общие утилиты графиков
     sections/              — Params, Slip, Insights, Charts, Methodology
     tracker/                — карточки, формы и статус ипотеки
-server/                    — .NET 8 API трекера (авторизация через Telegram, MySQL)
+server/                    — .NET 8 API трекера (авторизация — общий mvv42-auth, `Auth/Mvv42Auth.cs`; MySQL)
 deploy/                    — docker-compose и .env-шаблон для VDS
 docs/specs/                — дизайн-документы
 ```

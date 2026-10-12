@@ -1,5 +1,6 @@
-import { ActionIcon, Badge, Group, Paper, Stack, Text } from '@mantine/core'
-import { IconTrash } from '@tabler/icons-react'
+import { ActionIcon, Badge, Group, Stack, Text } from '@mantine/core'
+import { IconHistory, IconTrash } from '@tabler/icons-react'
+import { EmptyState } from '@mvv42/kit'
 import type { MortgageEventDto, MortgageEventKind } from '../../api/types'
 import { formatRub, formatPct } from '../../lib/formatters'
 
@@ -26,9 +27,12 @@ interface EventListProps {
 export function EventList({ events, onDelete, deletingId }: EventListProps) {
   if (events.length === 0) {
     return (
-      <Text c="dimmed" size="sm">
-        Корректировок пока нет.
-      </Text>
+      <EmptyState
+        compact
+        icon={<IconHistory size={22} />}
+        title="Корректировок пока нет"
+        description="Добавляйте остаток из выписки, смену ставки и досрочные погашения — расчёт станет точнее."
+      />
     )
   }
 
@@ -39,9 +43,9 @@ export function EventList({ events, onDelete, deletingId }: EventListProps) {
   })
 
   return (
-    <Stack gap="xs">
+    <ul className="cc-list">
       {sorted.map((e) => (
-        <Paper key={e.id} p="sm" radius="md" withBorder>
+        <li key={e.id} className="cc-list-row">
           <Group justify="space-between" wrap="nowrap" align="flex-start">
             <Stack gap={2}>
               <Group gap={6}>
@@ -52,7 +56,7 @@ export function EventList({ events, onDelete, deletingId }: EventListProps) {
                   {e.occurredOn}
                 </Text>
               </Group>
-              <Text size="sm">
+              <Text size="sm" fw={500} className="mvv-num">
                 {e.amount !== null && formatRub(e.amount)}
                 {e.rate !== null && formatPct(e.rate)}
               </Text>
@@ -72,8 +76,8 @@ export function EventList({ events, onDelete, deletingId }: EventListProps) {
               <IconTrash size={16} />
             </ActionIcon>
           </Group>
-        </Paper>
+        </li>
       ))}
-    </Stack>
+    </ul>
   )
 }

@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { Alert, Button, Group, Loader, Modal, Paper, Stack, Text, Tooltip } from '@mantine/core'
-import { IconAlertTriangle, IconChartLine, IconPlus } from '@tabler/icons-react'
+import { Button, Group, Modal, Skeleton, Stack, Text, Tooltip } from '@mantine/core'
+import { IconChartLine, IconPlus } from '@tabler/icons-react'
 import { notifications } from '@mantine/notifications'
+import { ErrorState, Page, Section } from '@mvv42/kit'
 import {
   getMortgage,
   updateMortgage,
@@ -25,7 +26,7 @@ export default function MortgagePage() {
   const enterMortgageMode = useCalculatorStore((s) => s.enterMortgageMode)
 
   const [details, setDetails] = useState<MortgageDetails | null>(null)
-  const [error, setError] = useState<string | null>(null)
+  const [error, setError] = useState<unknown>(null)
   const [editOpen, setEditOpen] = useState(false)
   const [addEventOpen, setAddEventOpen] = useState(false)
   const [deleteOpen, setDeleteOpen] = useState(false)
@@ -36,7 +37,7 @@ export default function MortgagePage() {
     setError(null)
     getMortgage(mortgageId)
       .then(setDetails)
-      .catch((e) => setError(e instanceof Error ? e.message : 'Не удалось загрузить ипотеку'))
+      .catch(setError)
   }, [mortgageId])
 
   useEffect(() => {
@@ -111,19 +112,21 @@ export default function MortgagePage() {
     }
   }
 
-  if (error) {
+  if (error !== null) {
     return (
-      <Alert color="red" icon={<IconAlertTriangle size={16} />}>
-        {error}
-      </Alert>
+      <Page width="wide">
+        <ErrorState error={error} onRetry={load} />
+      </Page>
     )
   }
 
   if (!details) {
     return (
-      <Group justify="center" py="xl">
-        <Loader />
-      </Group>
+      <Page width="wide" aria-busy="true" aria-label="Загрузка">
+        <Skeleton height={40} width="40%" radius="sm" />
+        <Skeleton height={220} radius="md" />
+        <Skeleton height={260} radius="md" />
+      </Page>
     )
   }
 
@@ -143,19 +146,13 @@ export default function MortgagePage() {
   }
 
   return (
-    <Stack gap="lg">
-      <Group justify="space-between" wrap="wrap">
-        <Stack gap={0}>
-          <Text fw={600} size="xl">
-            {mortgage.title}
-          </Text>
-          {mortgage.bank && (
-            <Text c="dimmed" size="sm">
-              {mortgage.bank}
-            </Text>
-          )}
-        </Stack>
-        <Group>
+    <Page
+      width="wide"
+      eyebrow="Трекер"
+      title={mortgage.title}
+      description={mortgage.bank ?? undefined}
+      actions={
+        <Group gap="xs">
           <Tooltip label="Ипотека погашена — считать нечего" disabled={!mortgageClosed}>
             {/* Не используем нативный disabled — иначе Tooltip не поймает наведение мышью */}
             <Button
@@ -163,7 +160,7 @@ export default function MortgagePage() {
               leftSection={<IconChartLine size={16} />}
               onClick={mortgageClosed ? undefined : handleOpenInCalculator}
               aria-disabled={mortgageClosed}
-              style={mortgageClosed ? { opacity: 0.5, cursor: 'not-allowed' } : undefined}
+              data-disabled={mortgageClosed || undefined}
             >
               Открыть в калькуляторе
             </Button>
@@ -171,25 +168,26 @@ export default function MortgagePage() {
           <Button variant="default" onClick={() => setEditOpen(true)}>
             Редактировать
           </Button>
-          <Button variant="default" color="red" onClick={() => setDeleteOpen(true)}>
+          <Button variant="default" c="red" onClick={() => setDeleteOpen(true)}>
             Удалить
           </Button>
         </Group>
-      </Group>
-
+      }
+    >
       <MortgageStatus state={state} />
 
-      <Paper p="lg" shadow="sm" radius="md">
-        <Group justify="space-between" mb="md">
-          <Text fw={600} size="lg">
-            История корректировок
-          </Text>
-          <Button size="xs" leftSection={<IconPlus size={14} />} onClick={() => setAddEventOpen(true)}>
+      <Section
+        title="История корректировок"
+        description="Выписки банка, смена ставки, досрочные погашения"
+        padding="none"
+        actions={
+          <Button size="xs" variant="default" leftSection={<IconPlus size={14} />} onClick={() => setAddEventOpen(true)}>
             Добавить
           </Button>
-        </Group>
+        }
+      >
         <EventList events={events} onDelete={handleDeleteEvent} deletingId={deletingEventId} />
-      </Paper>
+      </Section>
 
       <Modal opened={editOpen} onClose={() => setEditOpen(false)} title="Редактирование ипотеки" size="lg">
         <MortgageForm
@@ -228,6 +226,6 @@ export default function MortgagePage() {
           </Group>
         </Stack>
       </Modal>
-    </Stack>
+    </Page>
   )
 }

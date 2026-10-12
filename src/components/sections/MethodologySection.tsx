@@ -1,6 +1,5 @@
 import { memo } from 'react'
 import {
-  Paper,
   Text,
   Accordion,
   Stack,
@@ -10,6 +9,7 @@ import {
   Box,
   List,
 } from '@mantine/core'
+import { Section } from '@mvv42/kit'
 import {
   IconCalculator,
   IconReceipt,
@@ -27,15 +27,11 @@ export const MethodologySection = memo(function MethodologySection() {
   const hasFact = fact !== null
 
   return (
-    <Paper p="lg" shadow="sm" radius="md">
-      <Group gap="xs" mb="md">
-        <ThemeIcon color="gray" variant="light">
-          <IconCalculator size={18} />
-        </ThemeIcon>
-        <Text fw={600} size="lg">
-          Как это посчитано
-        </Text>
-      </Group>
+    <Section
+      padding="lg"
+      title="Как это посчитано"
+      description="Формулы, допущения и что учитывается для уже идущей ипотеки"
+    >
 
       <Accordion variant="separated">
         <Accordion.Item value="model">
@@ -53,16 +49,7 @@ export const MethodologySection = memo(function MethodologySection() {
                 <Text fw={600} size="sm" mb={4}>
                   Аннуитетный платёж
                 </Text>
-                <Box
-                  style={{
-                    fontFamily: 'monospace',
-                    backgroundColor: 'var(--mantine-color-default-hover)',
-                    padding: '0.5rem',
-                    borderRadius: 4,
-                    fontSize: 13,
-                    whiteSpace: 'pre-wrap',
-                  }}
-                >
+                <Box className="cc-formula">
                   PMT = P × r / (1 − (1+r)^(−n)){'\n'}r = годовая ставка / 12 / 100
                 </Box>
                 <Text size="sm" c="dimmed" mt={4}>
@@ -210,7 +197,7 @@ export const MethodologySection = memo(function MethodologySection() {
                   <Text size="sm" c="dimmed">
                     Имущественный вычет (возврат)
                   </Text>
-                  <Text size="sm" fw={600} c="green.7">
+                  <Text size="sm" fw={600} c="green">
                     {formatRub(result.tax.propertyReturnTotal)}
                   </Text>
                 </Group>
@@ -218,13 +205,13 @@ export const MethodologySection = memo(function MethodologySection() {
                   <Text size="sm" c="dimmed">
                     Вычет по процентам (возврат за горизонт)
                   </Text>
-                  <Text size="sm" fw={600} c="green.7">
+                  <Text size="sm" fw={600} c="green">
                     {formatRub(result.tax.interestReturnTotal)}
                   </Text>
                 </Group>
 
                 {result.tax.byYear.length > 0 && (
-                  <Table striped style={{ fontSize: 12 }}>
+                  <Table fz="xs">
                     <Table.Thead>
                       <Table.Tr>
                         <Table.Th>Год</Table.Th>
@@ -269,6 +256,6 @@ export const MethodologySection = memo(function MethodologySection() {
           </Accordion.Panel>
         </Accordion.Item>
       </Accordion>
-    </Paper>
+    </Section>
   )
 })

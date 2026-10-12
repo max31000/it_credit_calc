@@ -1,5 +1,7 @@
 import { memo, useMemo, useState } from 'react'
-import { Paper, Text, Tabs, Box, Stack, Group, SegmentedControl } from '@mantine/core'
+import { Text, Tabs, Box, Stack, Group, SegmentedControl } from '@mantine/core'
+import { Section } from '@mvv42/kit'
+import { useChartTheme } from '@mvv42/kit/charts'
 import {
   LineChart,
   Line,
@@ -17,7 +19,7 @@ import {
 } from 'recharts'
 import { IconChartLine, IconWallet, IconAlertTriangle, IconCash } from '@tabler/icons-react'
 import { useCalculatorStore } from '../../store/useCalculatorStore'
-import { CHART_COLORS, formatYAxis, useChartTheme, xTickFormatter, yearTickFormatter } from '../charts/chartUtils'
+import { CHART_COLORS, formatYAxis, xTickFormatter, yearTickFormatter } from '../charts/chartUtils'
 import { ChartTooltip } from '../charts/ChartTooltip'
 import { formatRub } from '../../lib/formatters'
 import { buildTimeline, toAbsolute, sliceFromToday, type Timeline, type TimelinePoint } from '../../lib/timeline'
@@ -26,29 +28,36 @@ import { buildCashFlow, type YearKind } from '../../lib/reporting'
 type TimelineDisplayMode = 'full' | 'forecast'
 type CashFlowStrategy = 'prepay' | 'save'
 
-/** Общие пропсы осей и сетки */
-function ChartFrame({
+/** Отступ сверху под подписи вертикалей («Сегодня», «Слёт») над областью построения. */
+const CHART_MARGIN = { top: 24, right: 12, left: 0, bottom: 0 }
+
+/** Линейный график таймлайна: оси, сетка и легенда — по конвенциям кита (`useChartTheme`). */
+function TimelineChart({
   children,
   data,
-  height = 300,
 }: {
   children: React.ReactNode
   data: Array<Record<string, number | null>>
-  height?: number
 }) {
-  const { gridColor, tickColor } = useChartTheme()
+  const t = useChartTheme()
   return (
-    <Box style={{ height }}>
+    <Box h={t.height}>
       <ResponsiveContainer width="100%" height="100%">
-        <LineChart data={data} margin={{ top: 24, right: 24, left: 10, bottom: 5 }}>
-          <CartesianGrid strokeDasharray="3 3" stroke={gridColor} />
-          <XAxis dataKey="month" tickFormatter={xTickFormatter} tick={{ fontSize: 12, fill: tickColor }} />
-          <YAxis tickFormatter={formatYAxis} tick={{ fontSize: 12, fill: tickColor }} width={65} />
+        <LineChart data={data} margin={CHART_MARGIN}>
+          <CartesianGrid {...t.grid} />
+          <XAxis dataKey="month" tickFormatter={xTickFormatter} {...t.xAxis} minTickGap={4} />
+          <YAxis tickFormatter={formatYAxis} {...t.yAxis} width={64} />
+          <Legend {...t.legend} />
           {children}
         </LineChart>
       </ResponsiveContainer>
     </Box>
   )
+}
+
+/** Подсказка-курсор для линий (единый вид кита). */
+function useLineTooltip() {
+  return useChartTheme().tooltip
 }
 
 /** Вертикаль «Сегодня» — общая для всех вкладок при наличии факта (§5.2 дизайна) */
@@ -73,7 +82,7 @@ function makePrepaymentDotShape(amount: number | null, yearMonth: string) {
     const [y, m] = yearMonth.split('-')
     const amountText = amount !== null ? formatRub(amount) : ''
     return (
-      <circle cx={cx} cy={cy} r={5} fill={CHART_COLORS.payoff} stroke="var(--mantine-color-body)" strokeWidth={1.5}>
+      <circle cx={cx} cy={cy} r={5} fill={CHART_COLORS.payoff} stroke={CHART_COLORS.surface} strokeWidth={1.5}>
         <title>{`Досрочное погашение ${amountText} · ${m}.${y}`}</title>
       </circle>
     )
@@ -86,6 +95,7 @@ interface TimelineTabProps {
 }
 
 function NetWorthTab({ points, timeline }: TimelineTabProps) {
+  const tooltipProps = useLineTooltip()
   const result = useCalculatorStore((s) => s.result)
   const effectiveSlipMonth = useCalculatorStore((s) => s.effectiveSlipMonth())
 
@@ -110,8 +120,9 @@ function NetWorthTab({ points, timeline }: TimelineTabProps) {
         {timeline.hasFact &&
           ' До сегодня трекер знает только долг, поэтому серая линия — нижняя граница капитала. Ступенька на «Сегодня» — ваши текущие накопления.'}
       </Text>
-      <ChartFrame data={data}>
+      <TimelineChart data={data}>
         <Tooltip
+          {...tooltipProps}
           content={
             <ChartTooltip
               todayMonth={timeline.hasFact ? timeline.todayMonth : undefined}
@@ -119,7 +130,6 @@ function NetWorthTab({ points, timeline }: TimelineTabProps) {
             />
           }
         />
-        <Legend />
         <ReferenceLine y={0} stroke={CHART_COLORS.neutral} strokeDasharray="4 4" strokeWidth={1} />
         {timeline.hasFact && <TodayReferenceLine month={timeline.todayMonth} />}
         {showSlip && (
@@ -147,7 +157,7 @@ function NetWorthTab({ points, timeline }: TimelineTabProps) {
           type="monotone"
           dataKey="netWorthPrepay"
           stroke={CHART_COLORS.prepay}
-          strokeWidth={2.5}
+          strokeWidth={2}
           dot={false}
           name="Гасить досрочно"
           isAnimationActive={false}
@@ -156,17 +166,18 @@ function NetWorthTab({ points, timeline }: TimelineTabProps) {
           type="monotone"
           dataKey="netWorthSave"
           stroke={CHART_COLORS.save}
-          strokeWidth={2.5}
+          strokeWidth={2}
           dot={false}
           name="Копить"
           isAnimationActive={false}
         />
-      </ChartFrame>
+      </TimelineChart>
     </Stack>
   )
 }
 
 function BalancesTab({ points, timeline }: TimelineTabProps) {
+  const tooltipProps = useLineTooltip()
   const result = useCalculatorStore((s) => s.result)
   const effectiveSlipMonth = useCalculatorStore((s) => s.effectiveSlipMonth())
 
@@ -199,8 +210,9 @@ function BalancesTab({ points, timeline }: TimelineTabProps) {
         Точка, где накопления пересекают долг, — момент, когда ипотеку можно закрыть целиком.
         {timeline.hasFact && prepaymentMarkers.length > 0 && ' Точки на линии факта — досрочные погашения.'}
       </Text>
-      <ChartFrame data={data}>
+      <TimelineChart data={data}>
         <Tooltip
+          {...tooltipProps}
           content={
             <ChartTooltip
               todayMonth={timeline.hasFact ? timeline.todayMonth : undefined}
@@ -208,7 +220,6 @@ function BalancesTab({ points, timeline }: TimelineTabProps) {
             />
           }
         />
-        <Legend />
         {timeline.hasFact && <TodayReferenceLine month={timeline.todayMonth} />}
         {showSlip && (
           <ReferenceLine
@@ -254,7 +265,7 @@ function BalancesTab({ points, timeline }: TimelineTabProps) {
             type="monotone"
             dataKey="debtFact"
             stroke={CHART_COLORS.neutral}
-            strokeWidth={2.5}
+            strokeWidth={2}
             dot={false}
             name="Долг (факт)"
             isAnimationActive={false}
@@ -264,7 +275,7 @@ function BalancesTab({ points, timeline }: TimelineTabProps) {
           type="monotone"
           dataKey="savingsSave"
           stroke={CHART_COLORS.savingsLine}
-          strokeWidth={2.5}
+          strokeWidth={2}
           dot={false}
           name="Накопления (копить)"
           isAnimationActive={false}
@@ -302,12 +313,13 @@ function BalancesTab({ points, timeline }: TimelineTabProps) {
             />
           )
         })}
-      </ChartFrame>
+      </TimelineChart>
     </Stack>
   )
 }
 
 function SlipRiskTab({ timeline }: { timeline: Timeline }) {
+  const tooltipProps = useLineTooltip()
   const result = useCalculatorStore((s) => s.result)
   const effectiveSlipMonth = useCalculatorStore((s) => s.effectiveSlipMonth())
 
@@ -331,8 +343,9 @@ function SlipRiskTab({ timeline }: { timeline: Timeline }) {
         {axisCaption} Для каждого месяца показан платёж, который возник бы при слёте именно в
         этот месяц: с внесением всех накоплений в долг и без него.
       </Text>
-      <ChartFrame data={data}>
+      <TimelineChart data={data}>
         <Tooltip
+          {...tooltipProps}
           content={
             <ChartTooltip
               labelPrefix="Если слёт в мес."
@@ -342,7 +355,6 @@ function SlipRiskTab({ timeline }: { timeline: Timeline }) {
             />
           }
         />
-        <Legend />
         {/* Вертикаль «Сегодня» здесь оставлена для единообразия с двумя другими вкладками,
             но осознанно не появляется на экране: ось X этой вкладки — не время, а месяц
             возможного слёта, и `timeline.slipPoints` начинается с `todayMonth + 1` (слёт
@@ -391,7 +403,7 @@ function SlipRiskTab({ timeline }: { timeline: Timeline }) {
           type="monotone"
           dataKey="paymentWithoutPrepay"
           stroke={CHART_COLORS.danger}
-          strokeWidth={2.5}
+          strokeWidth={2}
           dot={false}
           name="Платёж без внесения накоплений"
           isAnimationActive={false}
@@ -400,12 +412,12 @@ function SlipRiskTab({ timeline }: { timeline: Timeline }) {
           type="monotone"
           dataKey="paymentWithPrepay"
           stroke={CHART_COLORS.save}
-          strokeWidth={2.5}
+          strokeWidth={2}
           dot={false}
           name="Платёж после внесения накоплений"
           isAnimationActive={false}
         />
-      </ChartFrame>
+      </TimelineChart>
     </Stack>
   )
 }
@@ -423,7 +435,7 @@ function CashFlowTab({ timeline }: { timeline: Timeline }) {
   const fact = useCalculatorStore((s) => s.mortgageFact)
   const params = useCalculatorStore((s) => s.params)
   const [strategy, setStrategy] = useState<CashFlowStrategy>('save')
-  const { gridColor, tickColor } = useChartTheme()
+  const t = useChartTheme({ height: 320 })
 
   const rows = useMemo(() => buildCashFlow(result, fact, strategy), [result, fact, strategy])
   const mixedYear = useMemo(() => rows.find((r) => r.kind === 'mixed')?.year ?? null, [rows])
@@ -435,7 +447,7 @@ function CashFlowTab({ timeline }: { timeline: Timeline }) {
   return (
     <Stack gap="xs">
       <Group justify="space-between" wrap="wrap" gap="sm" align="flex-start">
-        <Text size="xs" c="dimmed" style={{ flex: 1, minWidth: 260 }}>
+        <Text size="xs" c="dimmed" flex={1} miw={220}>
           {timeline.hasFact
             ? 'Слева от «Сегодня» — фактически внесённые деньги по данным трекера, справа — прогноз выбранного подхода. Год стыка содержит и то, и другое.'
             : 'Движение денег по годам прогноза: проценты, тело кредита и досрочные погашения.'}
@@ -456,20 +468,20 @@ function CashFlowTab({ timeline }: { timeline: Timeline }) {
           сравниваются только накопления.
         </Text>
       )}
-      <Box style={{ height: 320 }}>
+      <Box h={t.height}>
         <ResponsiveContainer width="100%" height="100%">
-          <BarChart data={rows} margin={{ top: 24, right: 24, left: 10, bottom: 5 }}>
-            <CartesianGrid strokeDasharray="3 3" stroke={gridColor} />
-            <XAxis dataKey="year" tickFormatter={yearTickFormatter} tick={{ fontSize: 12, fill: tickColor }} />
-            <YAxis tickFormatter={formatYAxis} tick={{ fontSize: 12, fill: tickColor }} width={65} />
-            <Tooltip content={<ChartTooltip mode="year" labelPrefix="Год" />} />
-            <Legend />
-            <Bar dataKey="interest" stackId="a" name="Проценты" fill={CHART_COLORS.danger} isAnimationActive={false}>
+          <BarChart data={rows} margin={CHART_MARGIN}>
+            <CartesianGrid {...t.grid} />
+            <XAxis dataKey="year" tickFormatter={yearTickFormatter} {...t.xAxis} />
+            <YAxis tickFormatter={formatYAxis} {...t.yAxis} width={64} />
+            <Tooltip {...t.barTooltip} content={<ChartTooltip mode="year" labelPrefix="Год" />} />
+            <Legend {...t.legend} />
+            <Bar dataKey="interest" stackId="a" name="Проценты" fill={CHART_COLORS.danger} maxBarSize={t.bar.maxBarSize} isAnimationActive={false}>
               {rows.map((row) => (
                 <Cell key={`interest-${row.year}`} fillOpacity={cashFlowOpacity(row.kind)} />
               ))}
             </Bar>
-            <Bar dataKey="principal" stackId="a" name="Тело" fill={CHART_COLORS.save} isAnimationActive={false}>
+            <Bar dataKey="principal" stackId="a" name="Тело" fill={CHART_COLORS.save} maxBarSize={t.bar.maxBarSize} isAnimationActive={false}>
               {rows.map((row) => (
                 <Cell key={`principal-${row.year}`} fillOpacity={cashFlowOpacity(row.kind)} />
               ))}
@@ -479,6 +491,8 @@ function CashFlowTab({ timeline }: { timeline: Timeline }) {
               stackId="a"
               name="Досрочки"
               fill={CHART_COLORS.payoff}
+              maxBarSize={t.bar.maxBarSize}
+              radius={t.bar.radius}
               isAnimationActive={false}
             >
               {rows.map((row) => (
@@ -514,7 +528,7 @@ export const ChartsSection = memo(function ChartsSection() {
   if (result.loanAmount === 0) return null
 
   return (
-    <Paper p="lg" shadow="sm" radius="md">
+    <Section padding="lg" title="Графики" description="Как меняются капитал, долг и платёж во времени">
       <Tabs defaultValue="networth" keepMounted={false}>
         <Group justify="space-between" mb="md" wrap="wrap" gap="sm">
           <Tabs.List>
@@ -558,6 +572,6 @@ export const ChartsSection = memo(function ChartsSection() {
           <SlipRiskTab timeline={timeline} />
         </Tabs.Panel>
       </Tabs>
-    </Paper>
+    </Section>
   )
 })

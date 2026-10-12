@@ -1,5 +1,6 @@
 import { memo, useCallback } from 'react'
-import { Paper, Text, Divider, SimpleGrid, Stack, Alert, Group, Box } from '@mantine/core'
+import { Text, SimpleGrid, Stack, Alert, Group, Box } from '@mantine/core'
+import { Section } from '@mvv42/kit'
 import { IconAlertTriangle } from '@tabler/icons-react'
 import { useCalculatorStore } from '../../store/useCalculatorStore'
 import { SliderInput } from '../controls/SliderInput'
@@ -68,11 +69,7 @@ export const ParamsSection = memo(function ParamsSection() {
   )
 
   return (
-    <Paper p="lg" shadow="sm" radius="md">
-      <Text fw={600} size="lg">
-        Параметры ипотеки
-      </Text>
-      <Divider mb="md" mt="xs" />
+    <Section title="Параметры ипотеки" padding="lg">
 
       <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="xl">
         {/* Левая колонка: квартира и кредит — в режиме ипотеки это факты по договору
@@ -111,7 +108,7 @@ export const ParamsSection = memo(function ParamsSection() {
             format={formatRub}
             suffix=" ₽"
             rightHint={
-              <Text size="xs" c="dimmed" style={{ whiteSpace: 'nowrap' }}>
+              <Text size="xs" c="dimmed" className="mvv-num" style={{ whiteSpace: 'nowrap' }}>
                 {downPaymentPct.toFixed(1)}%
               </Text>
             }
@@ -133,7 +130,6 @@ export const ParamsSection = memo(function ParamsSection() {
             onChange={handleLoanAmount}
             format={formatRub}
             suffix=" ₽"
-            color="blue"
             tooltip="Кредит = стоимость − первоначальный взнос. Двигая эту шкалу, вы меняете взнос."
             marks={[
               { value: 0, label: '0' },
@@ -158,7 +154,6 @@ export const ParamsSection = memo(function ParamsSection() {
             format={formatPct}
             suffix=" %"
             decimalScale={1}
-            color="green"
             marks={[
               { value: 3, label: '3%' },
               { value: 6, label: '6%' },
@@ -334,6 +329,6 @@ export const ParamsSection = memo(function ParamsSection() {
           </Box>
         </Stack>
       </SimpleGrid>
-    </Paper>
+    </Section>
   )
 })
