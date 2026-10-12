@@ -1,4 +1,6 @@
 using System.Text.Json;
+using CreditCalc.Api.Auth;
+using MySqlConnector;
 
 namespace CreditCalc.Api.Middleware;
 
@@ -28,6 +30,11 @@ public class ErrorHandlingMiddleware
         catch (Exception ex)
         {
             _logger.LogError(ex, "Unhandled exception");
+
+            // FK на users (1452): закэшированный локальный id указывает на удалённую строку —
+            // сбрасываем кэш, следующий запрос пользователя провижинится заново.
+            if (ex is MySqlException { ErrorCode: MySqlErrorCode.NoReferencedRow2 or MySqlErrorCode.NoReferencedRow })
+                context.RequestServices?.GetService<ICurrentUser>()?.Invalidate();
 
             context.Response.StatusCode = StatusCodes.Status500InternalServerError;
             context.Response.ContentType = "application/json";

@@ -23,6 +23,9 @@ public interface IUserStore
 
     /// <summary>Создаёт пользователя; <c>null</c>, если <c>telegram_id</c> уже занят (MySQL 1062, гонка вставок).</summary>
     Task<ulong?> TryCreateAsync(User user);
+
+    /// <summary>Обновляет отображаемое имя (из claim <c>name</c> токена).</summary>
+    Task UpdateNameAsync(ulong id, string firstName);
 }
 
 public class UserRepository : IUserStore
@@ -58,6 +61,14 @@ public class UserRepository : IUserStore
               VALUES (@TelegramId, @Username, @FirstName, @LastName, @PhotoUrl);
               SELECT LAST_INSERT_ID();",
             user);
+    }
+
+    public async Task UpdateNameAsync(ulong id, string firstName)
+    {
+        await using var connection = _db.Create();
+        await connection.ExecuteAsync(
+            "UPDATE users SET first_name = @FirstName WHERE id = @Id",
+            new { Id = id, FirstName = firstName });
     }
 
     public async Task<ulong?> TryCreateAsync(User user)

@@ -138,22 +138,31 @@ jobs:
             set -e
             cd /opt/credit_calc
             umask 077
-            cat > .env <<EOF
-            MYSQL_ROOT_PASSWORD=${MYSQL_ROOT_PASSWORD}
-            MYSQL_PASSWORD=${MYSQL_PASSWORD}
-            EOF
-            chmod 600 .env
+            # Секреты — в .env (только они; файл целиком принадлежит этому job), атомарно.
+            printf 'MYSQL_ROOT_PASSWORD=%s\nMYSQL_PASSWORD=%s\n' "$MYSQL_ROOT_PASSWORD" "$MYSQL_PASSWORD" > .env.new
+            mv .env.new .env
+            # Теги образов — в tags.env: этот job меняет только API_TAG. Если WEB_TAG ещё нет (первый деплой
+            # после перехода на sha-теги) — тег работающего web-контейнера, иначе latest.
+            touch tags.env
+            set_tag() { { grep -v "^$1=" tags.env || true; echo "$1=$2"; } > tags.env.new; mv tags.env.new tags.env; }
+            running_tag() { img=$(docker inspect --format '{{.Config.Image}}' "$1" 2>/dev/null || true); case "$img" in *:*) echo "${img##*:}";; *) echo latest;; esac; }
+            dc() { docker compose --env-file .env --env-file tags.env -f docker-compose.prod.yml "$@"; }
+            grep -q '^WEB_TAG=' tags.env || set_tag WEB_TAG "$(running_tag credit_calc)"
+            set_tag API_TAG "$TAG"
+            curl_net() { docker run --rm --network cashpulse-network curlimages/curl:8.10.1 -sf --max-time 5 "$@"; }
             echo "${GHCR_PAT}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
-            # credit_calc_api должен видеть mvv42-auth:8080 (JWKS) — внешняя сеть платформы.
+            # credit_calc_api должен видеть mvv42-auth:8080 (JWKS) через внешнюю сеть платформы.
             docker network inspect cashpulse-network >/dev/null
-            export TAG
-            docker compose -f docker-compose.prod.yml pull credit_calc_api
-            docker compose -f docker-compose.prod.yml up -d credit_calc_api
-            # На первом деплое том MySQL пустой: инициализация занимает десятки секунд,
-            # API может упасть на миграциях и перезапуститься (restart: unless-stopped) — ретраи.
+            curl_net http://mvv42-auth:8080/auth/.well-known/jwks.json >/dev/null \
+              || { echo "JWKS of mvv42-auth is not reachable from cashpulse-network - refusing to deploy"; exit 1; }
+            dc pull credit_calc_api
+            # --no-deps: MySQL деплоем не пересоздаётся (см. README «Деплой»).
+            dc up -d --no-deps credit_calc_api
+            # Health — прямо в API-контейнер (по cashpulse-network), не через nginx фронта.
+            # На первом деплое API может перезапуститься на миграциях (restart: unless-stopped) — ретраи.
             ok=0
             for i in $(seq 1 30); do
-              if curl -sf http://localhost:8081/credit_calc/api/health | grep -q '"ok"'; then
+              if curl_net http://credit_calc_api:8080/health | grep -q '"ok"'; then
                 ok=1
                 echo "api health ok after ${i} attempt(s)"
                 break
@@ -162,8 +171,8 @@ jobs:
             done
             if [ "$ok" -ne 1 ]; then
               echo "api health check failed after 150s"
-              docker compose -f docker-compose.prod.yml ps
-              docker compose -f docker-compose.prod.yml logs --tail=50 credit_calc_api
+              dc ps
+              dc logs --tail=50 credit_calc_api
               exit 1
             fi
             docker image prune -f
@@ -244,11 +253,18 @@ jobs:
           script: |
             set -e
             cd /opt/credit_calc
+            umask 077
+            # Этот job меняет только WEB_TAG; API_TAG — backend-job (на первом деплое — тег работающего API).
+            touch tags.env .env
+            set_tag() { { grep -v "^$1=" tags.env || true; echo "$1=$2"; } > tags.env.new; mv tags.env.new tags.env; }
+            running_tag() { img=$(docker inspect --format '{{.Config.Image}}' "$1" 2>/dev/null || true); case "$img" in *:*) echo "${img##*:}";; *) echo latest;; esac; }
+            dc() { docker compose --env-file .env --env-file tags.env -f docker-compose.prod.yml "$@"; }
+            grep -q '^API_TAG=' tags.env || set_tag API_TAG "$(running_tag credit_calc_api)"
+            set_tag WEB_TAG "$TAG"
             echo "${GHCR_PAT}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
-            export TAG
-            docker compose -f docker-compose.prod.yml pull credit_calc
-            # --no-deps: API деплоит только backend-job (его образ с этим тегом может не существовать).
-            docker compose -f docker-compose.prod.yml up -d --no-deps credit_calc
+            dc pull credit_calc
+            # --no-deps: API деплоит только backend-job, MySQL не трогаем.
+            dc up -d --no-deps credit_calc
             ok=0
             for i in $(seq 1 30); do
               if curl -sf http://localhost:8081/credit_calc/ >/dev/null \
@@ -261,8 +277,8 @@ jobs:
             done
             if [ "$ok" -ne 1 ]; then
               echo "health check failed after 150s"
-              docker compose -f docker-compose.prod.yml ps
-              docker compose -f docker-compose.prod.yml logs --tail=50 credit_calc
+              dc ps
+              dc logs --tail=50 credit_calc
               exit 1
             fi
             docker image prune -f

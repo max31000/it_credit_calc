@@ -81,6 +81,35 @@ public class CurrentUserTests
     }
 
     [Fact]
+    public async Task ChangedName_IsRefreshed_SameName_IsNotWritten()
+    {
+        var store = new FakeUserStore();
+        var user = store.Seed(telegramId: 4242, id: 3);
+        user.FirstName = "Old Name";
+        var provisioning = new UserProvisioning(store);
+
+        await provisioning.GetOrCreateAsync(Me(4242, "Max V"));
+        await provisioning.GetOrCreateAsync(Me(4242, "Max V"));
+
+        store.NameUpdates.Should().ContainSingle().Which.Should().Be((3UL, "Max V"));
+    }
+
+    [Fact]
+    public async Task Invalidate_DropsCachedId()
+    {
+        var store = new FakeUserStore();
+        var cache = new MemoryCache(new MemoryCacheOptions());
+        store.Seed(telegramId: 5151, id: 9);
+        var current = CurrentUserFor(store, 5151, "1", cache);
+        (await current.GetLocalUserIdAsync()).Should().Be(9UL);
+
+        store.Seed(telegramId: 5151, id: 10); // строку пересоздали (например, удалили руками)
+        current.Invalidate();
+
+        (await CurrentUserFor(store, 5151, "1", cache).GetLocalUserIdAsync()).Should().Be(10UL);
+    }
+
+    [Fact]
     public async Task LongName_IsTruncatedToColumnSize()
     {
         var store = new FakeUserStore();

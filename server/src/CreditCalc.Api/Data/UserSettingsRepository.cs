@@ -35,7 +35,7 @@ public class UserSettingsRepository
         _logger = logger;
     }
 
-    public async Task<UserSettingsRow?> GetAsync(ulong userId)
+    public virtual async Task<UserSettingsRow?> GetAsync(ulong userId)
     {
         await using var connection = _db.Create();
         return await connection.QuerySingleOrDefaultAsync<UserSettingsRow>(
@@ -43,7 +43,7 @@ public class UserSettingsRepository
             new { UserId = userId });
     }
 
-    public async Task<UserSettingsRow> UpsertAsync(ulong userId, int version, string dataJson)
+    public virtual async Task<UserSettingsRow> UpsertAsync(ulong userId, int version, string dataJson)
     {
         await using var connection = _db.Create();
         await connection.ExecuteAsync(

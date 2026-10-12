@@ -61,7 +61,7 @@ src/
     tracker.ts              — расчёт состояния ипотеки по истории корректировок
     formatters.ts          — форматирование чисел
     __tests__/
-  store/                   — Zustand-сторы (calculator, auth), persist в localStorage
+  store/                   — Zustand-стор калькулятора, persist в localStorage (вход — общий mvv42-auth, `useMe` кита)
   api/                     — клиент API трекера
   pages/                   — Calculator, TrackerList, Mortgage (UI на `@mvv42/kit`)
   components/
@@ -96,12 +96,36 @@ curl localhost:8080/health
 
 ## Деплой
 
-Пуш в `master` → GitHub Actions: тесты фронта и бэкенда, сборка двух Docker-образов
-(`it_credit_calc` — фронт с nginx, `it_credit_calc-api` — API трекера) и публикация в GHCR,
-деплой на VDS через `docker compose`.
+Один workflow `.github/workflows/deploy.yml`: `changes` (какие части изменились) → `backend` (тесты API,
+образ `it_credit_calc-api:sha-<commit>`, деплой, health) → `frontend` (тесты фронта, образ
+`it_credit_calc:sha-<commit>`, деплой, health). Изменился только фронт — backend пропускается.
+`workflow_dispatch` собирает и деплоит обе части. Образы публикуются в GHCR **только** с тегом `sha-<commit>`
+(без `latest`); контейнеры помечены `com.centurylinklabs.watchtower.enable=false` — watchtower их не трогает.
 
-Схема на VDS: внешний nginx VDS → `127.0.0.1:8081` → nginx контейнера `it_credit_calc` →
-`/credit_calc/api/` проксируется на `credit_calc_api:8080` внутри общей docker-сети;
-MySQL и API наружу не публикуются. Состав — `deploy/docker-compose.prod.yml`,
-переменные — из `deploy/.env.example` (реальные значения генерируются из GitHub Secrets
-на этапе деплоя).
+Схема на VDS: внешний nginx VDS → `127.0.0.1:8081` → nginx контейнера `credit_calc` →
+`/credit_calc/api/` проксируется на `credit_calc_api:8080` (сеть `credit_calc_net`);
+MySQL и API наружу не публикуются. `credit_calc_api` также в сети `cashpulse-network` — оттуда он берёт
+JWKS общего auth (`http://mvv42-auth:8080`). Состав — `deploy/docker-compose.prod.yml`.
+
+Файлы в `/opt/credit_calc` на сервере:
+
+| Файл | Кто пишет | Содержимое |
+|---|---|---|
+| `.env` | backend-job (из GitHub Secrets) | `MYSQL_ROOT_PASSWORD`, `MYSQL_PASSWORD` (шаблон `deploy/.env.example`) |
+| `tags.env` | backend-job — `API_TAG`, frontend-job — `WEB_TAG` (каждый только свою строку) | шаблон `deploy/tags.env.example` |
+
+Ручные команды на сервере — всегда с обоими env-файлами:
+
+```bash
+cd /opt/credit_calc
+alias dc='docker compose --env-file .env --env-file tags.env -f docker-compose.prod.yml'
+dc ps
+dc logs --tail=100 credit_calc_api
+dc up -d --no-deps credit_calc_api      # перезапуск API на текущем API_TAG
+# откат API: заменить API_TAG в tags.env на прежний sha-<commit>, затем dc up -d --no-deps credit_calc_api
+```
+
+Деплой поднимает API и фронт с `--no-deps`, поэтому MySQL им не пересоздаётся. Метка watchtower на
+`credit_calc_mysql` применится при следующем ручном `dc up -d credit_calc_mysql` (контейнер пересоздастся,
+данные — в томе `credit_calc_mysql_data`). Перед деплоем API проверяется доступность JWKS из
+`cashpulse-network`, health API — прямо в контейнер (`http://credit_calc_api:8080/health` из той же сети).

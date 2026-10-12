@@ -106,6 +106,15 @@ public sealed class FakeUserStore : IUserStore
         return Task.FromResult(_users.GetValueOrDefault(telegramId));
     }
 
+    public readonly ConcurrentBag<(ulong Id, string Name)> NameUpdates = [];
+
+    public Task UpdateNameAsync(ulong id, string firstName)
+    {
+        NameUpdates.Add((id, firstName));
+        foreach (var u in _users.Values.Where(u => u.Id == id)) u.FirstName = firstName;
+        return Task.CompletedTask;
+    }
+
     public async Task<ulong?> TryCreateAsync(User user)
     {
         await Task.Yield();
@@ -128,19 +137,24 @@ public sealed class FakeUserStore : IUserStore
 public class Mvv42AppFactory : WebApplicationFactory<Program>
 {
     public FakeUserStore Users { get; } = new();
+    public InMemoryMortgageRepository Mortgages { get; } = new();
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
         builder.UseEnvironment("Testing");
         builder.UseSetting("Mvv42Auth:CookieName", Mvv42TestAuth.CookieName);
-        // Недоступная БД: хендлер, дошедший до репозитория, падает быстро (→ 500), а не висит на таймауте.
-        builder.UseSetting("ConnectionStrings:DefaultConnection",
-            "Server=127.0.0.1;Port=1;Database=none;User=none;Password=none;ConnectionTimeout=1;");
         builder.ConfigureServices(services =>
         {
             services.UseStubJwks();
             services.RemoveAll<IUserStore>();
             services.AddSingleton<IUserStore>(Users);
+            // In-memory репозитории (владение по userId как в SQL) — без MySQL, ответы эндпоинтов настоящие.
+            services.RemoveAll<MortgageRepository>();
+            services.RemoveAll<MortgageEventRepository>();
+            services.RemoveAll<UserSettingsRepository>();
+            services.AddSingleton<MortgageRepository>(Mortgages);
+            services.AddSingleton<MortgageEventRepository>(new InMemoryMortgageEventRepository(Mortgages));
+            services.AddSingleton<UserSettingsRepository>(new InMemoryUserSettingsRepository());
         });
     }
 

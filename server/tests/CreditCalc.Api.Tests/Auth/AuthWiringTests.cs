@@ -1,5 +1,7 @@
 using System.Net;
 using System.Net.Http.Headers;
+using System.Net.Http.Json;
+using System.Text.Json;
 using System.Security.Cryptography;
 using System.Text.RegularExpressions;
 using FluentAssertions;
@@ -136,11 +138,10 @@ public class AuthWiringTests(Mvv42AppFactory factory) : IClassFixture<Mvv42AppFa
         const long tg = 1004;
         var token = Mvv42TestAuth.Token(tg, sub: "777");
 
-        // Дальше хендлер идёт в MySQL, которой в тестах нет (→ 500), — важно, что auth пропустил
-        // и локальный пользователь найден/создан по tg, а не по sub.
         var response = await factory.CreateClient().SendAsync(Mvv42AppFactory.Request(HttpMethod.Get, "/api/profile/settings", token));
 
-        response.StatusCode.Should().NotBe(HttpStatusCode.Unauthorized).And.NotBe(HttpStatusCode.Forbidden);
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        (await response.Content.ReadAsStringAsync()).Should().Contain("\"settings\":null");
         factory.Users.All.Should().ContainSingle(u => u.TelegramId == tg)
             .Which.Id.Should().NotBe(777UL);
     }
@@ -152,7 +153,59 @@ public class AuthWiringTests(Mvv42AppFactory factory) : IClassFixture<Mvv42AppFa
 
         var response = await factory.CreateClient().SendAsync(Mvv42AppFactory.Request(HttpMethod.Get, "/api/mortgages", token));
 
-        response.StatusCode.Should().NotBe(HttpStatusCode.Unauthorized).And.NotBe(HttpStatusCode.Forbidden);
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+    }
+
+    private static HttpRequestMessage Json(HttpMethod method, string url, string token, object body)
+    {
+        var request = Mvv42AppFactory.Request(method, url, token, Mvv42TestAuth.Origin);
+        request.Content = JsonContent.Create(body);
+        return request;
+    }
+
+    private static object MortgageBody(string title) => new
+    {
+        title, bank = (string?)null, propertyPrice = 9_000_000, downPayment = 1_800_000, principal = 7_200_000,
+        rate = 6, termMonths = 240, startedOn = "2024-01-15", monthlyPayment = (decimal?)null,
+        usedPropertyBase = 0, usedInterestBase = 0,
+    };
+
+    [Fact]
+    public async Task UsersSeeOnlyTheirOwnData()
+    {
+        var client = factory.CreateClient();
+        // одинаковый sub у обоих — изоляция держится на tg → локальный id, а не на sub
+        var alice = Mvv42TestAuth.Token(2001, sub: "1");
+        var bob = Mvv42TestAuth.Token(2002, sub: "1");
+
+        var created = await client.SendAsync(Json(HttpMethod.Post, "/api/mortgages", alice, MortgageBody("Квартира Алисы")));
+        created.StatusCode.Should().Be(HttpStatusCode.Created);
+        var id = (await created.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetUInt64();
+        (await client.SendAsync(Json(HttpMethod.Put, "/api/profile/settings", alice, new
+        {
+            version = 2,
+            settings = new { salary = 300_000, depositRate = 15, freeMonthly = 100_000, horizonYears = 10, keyRate = 16, bankDiscount = 0.5, startingSavings = 1_000_000 },
+        }))).StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var bobList = await client.SendAsync(Mvv42AppFactory.Request(HttpMethod.Get, "/api/mortgages", bob));
+        bobList.StatusCode.Should().Be(HttpStatusCode.OK);
+        (await bobList.Content.ReadFromJsonAsync<JsonElement>()).GetArrayLength().Should().Be(0);
+
+        (await client.SendAsync(Mvv42AppFactory.Request(HttpMethod.Get, $"/api/mortgages/{id}", bob))).StatusCode
+            .Should().Be(HttpStatusCode.NotFound);
+        (await client.SendAsync(Json(HttpMethod.Put, $"/api/mortgages/{id}", bob, MortgageBody("взлом")))).StatusCode
+            .Should().Be(HttpStatusCode.NotFound);
+        (await client.SendAsync(Json(HttpMethod.Post, $"/api/mortgages/{id}/events", bob,
+            new { kind = "balance", occurredOn = "2025-01-01", amount = 1, rate = (decimal?)null, note = (string?)null })))
+            .StatusCode.Should().Be(HttpStatusCode.NotFound);
+        (await client.SendAsync(Mvv42AppFactory.Request(HttpMethod.Delete, $"/api/mortgages/{id}", bob, Mvv42TestAuth.Origin)))
+            .StatusCode.Should().Be(HttpStatusCode.NotFound);
+        var bobSettings = await client.SendAsync(Mvv42AppFactory.Request(HttpMethod.Get, "/api/profile/settings", bob));
+        (await bobSettings.Content.ReadAsStringAsync()).Should().Contain("\"settings\":null");
+
+        var aliceGet = await client.SendAsync(Mvv42AppFactory.Request(HttpMethod.Get, $"/api/mortgages/{id}", alice));
+        aliceGet.StatusCode.Should().Be(HttpStatusCode.OK);
+        factory.Mortgages.Find(id)!.Title.Should().Be("Квартира Алисы");
     }
 
     [Fact]

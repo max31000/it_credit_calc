@@ -1,6 +1,10 @@
+# Запуск на сервере (секреты в .env пишет backend-job, теги образов в tags.env — каждый job свой):
+#   cd /opt/credit_calc
+#   docker compose --env-file .env --env-file tags.env -f docker-compose.prod.yml ps
+# Подробнее — README, раздел «Деплой».
 services:
   credit_calc:
-    image: ghcr.io/max31000/it_credit_calc:${TAG:?TAG (sha-<commit>) is required}
+    image: ghcr.io/max31000/it_credit_calc:${WEB_TAG:?WEB_TAG (sha-<commit>) is required, see tags.env}
     container_name: credit_calc
     restart: unless-stopped
     labels:
@@ -13,7 +17,7 @@ services:
       - credit_calc_net
 
   credit_calc_api:
-    image: ghcr.io/max31000/it_credit_calc-api:${TAG:?TAG (sha-<commit>) is required}
+    image: ghcr.io/max31000/it_credit_calc-api:${API_TAG:?API_TAG (sha-<commit>) is required, see tags.env}
     container_name: credit_calc_api
     restart: unless-stopped
     labels:
