@@ -89,7 +89,7 @@ export function DeductionsBlock() {
           ]}
           fullWidth
         />
-        <Collapse in={segment === 'partial'}>
+        <Collapse expanded={segment === 'partial'}>
           <NumericInput
             label="Уже вернули, ₽"
             value={propertyRefund}
