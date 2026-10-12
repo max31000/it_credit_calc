@@ -87,7 +87,7 @@ export const SlipSection = memo(function SlipSection() {
       </Text>
       <Divider mb="md" mt="xs" />
 
-      <Collapse in={slipEnabled}>
+      <Collapse expanded={slipEnabled}>
         <Stack gap="lg">
           {rateAlreadyMarket && (
             <Alert color="orange" variant="light" icon={<IconAlertTriangle size={16} />}>

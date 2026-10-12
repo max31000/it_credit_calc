@@ -12,10 +12,10 @@
     "typecheck": "tsc --noEmit -p tsconfig.app.json && tsc --noEmit -p tsconfig.node.json"
   },
   "dependencies": {
-    "@mantine/core": "^7.17.8",
-    "@mantine/form": "^7.17.8",
-    "@mantine/hooks": "^7.17.8",
-    "@mantine/notifications": "^7.17.8",
+    "@mantine/core": "^9.7.2",
+    "@mantine/form": "^9.7.2",
+    "@mantine/hooks": "^9.7.2",
+    "@mantine/notifications": "^9.7.2",
     "@tabler/icons-react": "^3.41.1",
     "react": "^19.2.4",
     "react-dom": "^19.2.4",

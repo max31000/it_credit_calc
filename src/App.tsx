@@ -1,5 +1,5 @@
 import { useEffect } from 'react'
-import { MantineProvider } from '@mantine/core'
+import { Accordion, MantineProvider, Popover, Switch, createTheme, v8CssVariablesResolver } from '@mantine/core'
 import '@mantine/core/styles.css'
 import { Notifications } from '@mantine/notifications'
 import '@mantine/notifications/styles.css'
@@ -81,10 +81,28 @@ function AppRoutes() {
   )
 }
 
+/** Mantine 9 сменил ряд дефолтов — возвращаем поведение/вид 7.x:
+ *  defaultRadius md→sm (9.x), Switch с индикатором в «пупке» (8.x),
+ *  Popover закрывается при отрыве таргета (8.x). */
+const theme = createTheme({
+  defaultRadius: 'sm',
+  components: {
+    Switch: Switch.extend({ defaultProps: { withThumbIndicator: false } }),
+    Popover: Popover.extend({ defaultProps: { hideDetached: false } }),
+    // 9.x красит заголовок аккордеона в --mantine-color-bright (белый в тёмной теме)
+    Accordion: Accordion.extend({ styles: { control: { color: 'var(--mantine-color-text)' } } }),
+  },
+})
+
 function App() {
   return (
-    <MantineProvider defaultColorScheme="auto">
-      <Notifications position="top-right" autoClose={5000} />
+    <MantineProvider
+      theme={theme}
+      defaultColorScheme="auto"
+      // 9.x: light-вариант на сплошных цветах вместо прозрачности — держим старый вид
+      cssVariablesResolver={v8CssVariablesResolver}
+    >
+      <Notifications position="top-right" autoClose={5000} pauseResetOnHover="notification" />
       <BrowserRouter basename={import.meta.env.BASE_URL}>
         <AppRoutes />
       </BrowserRouter>
