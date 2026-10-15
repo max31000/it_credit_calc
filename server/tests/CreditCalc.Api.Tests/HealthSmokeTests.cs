@@ -46,6 +46,7 @@ public class HealthSmokeTests : IClassFixture<HealthSmokeTests.TestingWebApplica
         protected override void ConfigureWebHost(IWebHostBuilder builder)
         {
             builder.UseEnvironment("Testing");
+            builder.UseSetting("Metrics:Port", "0");
         }
     }
 }
