@@ -13,6 +13,7 @@
          JwtBearer 8.0.11 тянет 7.1.2, пиним OpenIdConnect к версии System.IdentityModel.Tokens.Jwt. -->
     <PackageReference Include="Microsoft.IdentityModel.Protocols.OpenIdConnect" Version="7.6.3" />
     <PackageReference Include="MySqlConnector" Version="2.3.5" />
+    <PackageReference Include="prometheus-net.AspNetCore" Version="8.2.1" />
     <PackageReference Include="Swashbuckle.AspNetCore" Version="6.8.1" />
     <PackageReference Include="System.IdentityModel.Tokens.Jwt" Version="7.6.3" />
   </ItemGroup>

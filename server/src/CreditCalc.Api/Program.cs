@@ -4,8 +4,20 @@ using CreditCalc.Api.Data;
 using CreditCalc.Api.Endpoints;
 using CreditCalc.Api.Middleware;
 using Mvv42.Auth.Client;
+using Prometheus;
+
+// Метрики (spec mvv42-infra-mon 2026-10-16-app-metrics): процесс и рантайм .NET — да,
+// EventCounters и адаптер .NET Meters — нет (лишние серии). До создания любых метрик.
+Metrics.SuppressDefaultMetrics(new SuppressDefaultMetricOptions { SuppressEventCounters = true, SuppressMeters = true });
 
 var builder = WebApplication.CreateBuilder(args);
+
+// /metrics — только на отдельном KestrelMetricServer (порт 9091 внутри контейнера, наружу —
+// 127.0.0.1:9581). Основной порт 8080 (и nginx фронта, проксирующий /credit_calc/api/) метрики не отдаёт.
+// Metrics:Port = 0 выключает сервер (тестовые хосты не делят порт).
+var metricsPort = builder.Configuration.GetValue("Metrics:Port", 9091);
+if (metricsPort > 0)
+    builder.Services.AddMetricServer(o => o.Port = (ushort)metricsPort);
 
 // CORS — по умолчанию нужен только фронту в dev-режиме (Vite на 5173) при обходе прокси;
 // в проде фронт и API — один origin (nginx срезает /credit_calc/api), CORS не участвует (spec §4).
@@ -75,6 +87,11 @@ if (app.Environment.IsDevelopment())
     app.UseSwagger();
     app.UseSwaggerUI(c => c.SwaggerEndpoint("/swagger/v1/swagger.json", "CreditCalc API v1"));
 }
+
+// Явный UseRouting, чтобы UseHttpMetrics видел выбранный эндпоинт: метка endpoint = шаблон
+// маршрута (/api/mortgages/{id}), а не сырой путь; коды — 2xx/4xx/5xx.
+app.UseRouting();
+app.UseHttpMetrics(o => o.ReduceStatusCodeCardinality());
 
 app.UseCors();
 app.UseAuthentication();

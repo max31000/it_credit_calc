@@ -143,6 +143,7 @@ public class Mvv42AppFactory : WebApplicationFactory<Program>
     {
         builder.UseEnvironment("Testing");
         builder.UseSetting("Mvv42Auth:CookieName", Mvv42TestAuth.CookieName);
+        builder.UseSetting("Metrics:Port", "0"); // без отдельного metric-сервера: хосты тестов не делят порт 9091
         builder.ConfigureServices(services =>
         {
             services.UseStubJwks();
